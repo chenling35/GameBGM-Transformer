@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Virtual Environment
+venv/
+env/
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# PyTorch models
+*.pt
+*.pth
+*.ckpt
+
+# Large folders - IGNORE ALL
+checkpoints/
+data/
+logs/
+tensorboard/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Backend cache
+backend/audio_cache/
+backend/__pycache__/
+
+# EMO-Disentanger
+EMO-Disentanger/
+
+# MIDI files
+*.mid
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
