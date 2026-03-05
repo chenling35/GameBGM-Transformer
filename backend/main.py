@@ -1,32 +1,137 @@
 """
 情感音乐生成系统 - FastAPI 后端
+支持真实模型推理、训练管理和文件播放
 """
 import os
+import sys
+import uuid
+import shutil
 import subprocess
+import threading
 from pathlib import Path
+from datetime import datetime
+from typing import Optional
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-# 项目根目录
+# ═══════════════ 路径配置 ═══════════════
 BASE_DIR = Path(__file__).resolve().parent.parent
 EMO_DIR = BASE_DIR / "EMO-Disentanger"
 GENERATION_DIR = EMO_DIR / "generation"
+MIDI_LIBRARY_DIR = GENERATION_DIR / "emopia_functional_two"
+DEMO_DIR = GENERATION_DIR / "demo" / "demo"
 ASSETS_DIR = BASE_DIR / "assets"
 SOUNDFONT_PATH = ASSETS_DIR / "soundfont.sf2"
-
-# 音频缓存目录
 AUDIO_CACHE_DIR = BASE_DIR / "backend" / "audio_cache"
 AUDIO_CACHE_DIR.mkdir(exist_ok=True)
 
+# ═══════════════ 默认权重路径 ═══════════════
+DEFAULT_WEIGHTS = {
+    "stage1": "best_weight/Functional-two/emopia_lead_sheet_finetune/ep016_loss0.685_params.pt",
+    "stage2_gpt2": "best_weight/Functional-two/emopia_acccompaniment_finetune_gpt2/ep300_loss0.120_params.pt",
+    "stage2_performer": "best_weight/Functional-two/emopia_acccompaniment_finetune/ep300_loss0.338_params.pt",
+}
+
+DEFAULT_CONFIGS = {
+    "stage1_finetune": "stage1_compose/config/emopia_finetune.yaml",
+    "stage1_finetune_full": "stage1_compose/config/emopia_finetune_full.yaml",
+    "stage1_pretrain_hooktheory": "stage1_compose/config/hooktheory_pretrain.yaml",
+    "stage1_pretrain_pop1k7": "stage1_compose/config/pop1k7_pretrain.yaml",
+    "stage2_finetune_gpt2": "stage2_accompaniment/config/emopia_finetune_gpt2.yaml",
+    "stage2_finetune_performer": "stage2_accompaniment/config/emopia_finetune.yaml",
+    "stage2_pretrain_gpt2": "stage2_accompaniment/config/pop1k7_pretrain_gpt2.yaml",
+    "stage2_pretrain_performer": "stage2_accompaniment/config/pop1k7_pretrain.yaml",
+}
+
+# ═══════════════ 情感映射 ═══════════════
+EMOTION_MAP = {
+    "Q1": {"name": "开心", "en": "Happy", "desc": "正效价, 高唤醒"},
+    "Q2": {"name": "紧张", "en": "Tense", "desc": "负效价, 高唤醒"},
+    "Q3": {"name": "悲伤", "en": "Sad", "desc": "负效价, 低唤醒"},
+    "Q4": {"name": "平静", "en": "Calm", "desc": "正效价, 低唤醒"},
+}
+
+# ═══════════════ 任务管理 ═══════════════
+active_tasks = {}
+
+
+class TaskInfo:
+    def __init__(self, task_id: str, task_type: str, description: str):
+        self.task_id = task_id
+        self.task_type = task_type
+        self.description = description
+        self.status = "running"
+        self.logs: list[str] = []
+        self.process: Optional[subprocess.Popen] = None
+        self.start_time = datetime.now().isoformat()
+        self.end_time: Optional[str] = None
+        self.result_files: list[str] = []
+
+    def to_dict(self):
+        return {
+            "task_id": self.task_id,
+            "task_type": self.task_type,
+            "description": self.description,
+            "status": self.status,
+            "logs": self.logs[-200:],
+            "log_count": len(self.logs),
+            "start_time": self.start_time,
+            "end_time": self.end_time,
+            "result_files": self.result_files,
+        }
+
+
+def run_subprocess_task(task: TaskInfo, command: list[str], cwd: str):
+    """在后台线程中运行子进程并捕获输出"""
+    try:
+        task.logs.append(f"[系统] 启动命令: {' '.join(command)}")
+        task.logs.append(f"[系统] 工作目录: {cwd}")
+        task.logs.append("")
+
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            cwd=cwd,
+            bufsize=1,
+            encoding="utf-8",
+            errors="replace",
+        )
+        task.process = process
+
+        for line in iter(process.stdout.readline, ""):
+            task.logs.append(line.rstrip())
+
+        process.wait()
+
+        if process.returncode == 0:
+            task.status = "completed"
+            task.logs.append("")
+            task.logs.append("[系统] 任务完成!")
+        else:
+            task.status = "failed"
+            task.logs.append("")
+            task.logs.append(f"[系统] 任务失败，返回码: {process.returncode}")
+
+    except Exception as e:
+        task.status = "failed"
+        task.logs.append(f"[系统] 错误: {str(e)}")
+    finally:
+        task.end_time = datetime.now().isoformat()
+        task.process = None
+
+
+# ═══════════════ FastAPI App ═══════════════
 app = FastAPI(
     title="情感音乐生成系统",
-    description="基于 EMO-Disentanger 的情感驱动钢琴音乐生成 API",
-    version="1.0.0"
+    description="基于 EMO-Disentanger 的情感驱动钢琴音乐生成",
+    version="2.0.0",
 )
 
-# 允许前端跨域请求
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
@@ -35,274 +140,400 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 情感映射
-EMOTION_MAP = {
-    "Q1": {"name": "开心", "valence": "Positive", "arousal": "Q1"},
-    "Q2": {"name": "紧张", "valence": "Negative", "arousal": "Q2"},
-    "Q3": {"name": "悲伤", "valence": "Negative", "arousal": "Q3"},
-    "Q4": {"name": "平静", "valence": "Positive", "arousal": "Q4"},
-}
 
-# 预生成的 MIDI 文件
-DEMO_FILES = {
-    "Q1": "samp_00_Q1_full.mid",
-    "Q2": "samp_00_Q2_full.mid",
-    "Q3": "samp_00_Q3_full.mid",
-    "Q4": "samp_00_Q4_full.mid",
-}
+# ═══════════════ 请求模型 ═══════════════
+class GenerateLeadSheetRequest(BaseModel):
+    representation: str = "functional"
+    config: str = "stage1_finetune"
+    weights: str = ""
+    n_groups: int = 5
+    output_dir: str = "generation/emopia_functional_two"
 
 
-class GenerateRequest(BaseModel):
-    emotion: str  # Q1, Q2, Q3, Q4
+class GenerateMusicRequest(BaseModel):
+    model_type: str = "gpt2"
+    representation: str = "functional"
+    config: str = "stage2_finetune_gpt2"
+    weights: str = ""
+    output_dir: str = "generation/emopia_functional_two"
 
 
-class GenerateResponse(BaseModel):
-    success: bool
-    emotion: str
-    emotion_name: str
-    filename: str
-    audio_url: str
-    bars: int
-    notes: int
-    duration: str
-    message: str
+class TrainRequest(BaseModel):
+    stage: str = "stage2"
+    model_type: str = "gpt2"
+    representation: str = "functional"
+    config: str = "stage2_finetune_gpt2"
 
 
-def find_midi_file(filename: str) -> Path | None:
-    """在多个可能的目录中查找 MIDI 文件"""
-    possible_paths = [
-        GENERATION_DIR / "demo" / "demo" / filename,
-        GENERATION_DIR / "demo" / filename,
-        GENERATION_DIR / "emopia_functional_two" / filename,
-    ]
-    for path in possible_paths:
-        if path.exists():
-            return path
-    return None
+class PlayFileRequest(BaseModel):
+    file_path: str
 
 
+class BrowseRequest(BaseModel):
+    directory: str = ""
+    pattern: str = "*.mid"
+
+
+# ═══════════════ 工具函数 ═══════════════
 def convert_midi_to_wav(midi_path: Path, output_path: Path) -> bool:
-    """将 MIDI 转换为 WAV 文件（直接调用 FluidSynth）"""
+    """将 MIDI 转换为 WAV"""
     try:
         if not SOUNDFONT_PATH.exists():
-            print(f"[警告] SoundFont 文件不存在: {SOUNDFONT_PATH}")
             return False
-
-        # 直接调用 fluidsynth 命令行
-        # 参数顺序：选项在前，soundfont 和 midi 文件在后
         cmd = [
-            "fluidsynth",
-            "-ni",                      # 非交互模式
-            "-F", str(output_path),     # 输出文件
-            "-r", "44100",              # 采样率
-            str(SOUNDFONT_PATH),        # SoundFont 文件
-            str(midi_path)              # MIDI 文件
+            "fluidsynth", "-ni",
+            "-F", str(output_path),
+            "-r", "44100",
+            str(SOUNDFONT_PATH),
+            str(midi_path),
         ]
-
-        print(f"[转换] 执行命令: {' '.join(cmd)}")
-
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=60
-        )
-
-        if result.returncode != 0:
-            print(f"[错误] FluidSynth 错误: {result.stderr}")
-            return False
-
-        if output_path.exists():
-            print(f"[成功] 音频已生成: {output_path}")
-            return True
-        else:
-            print(f"[错误] 输出文件未生成")
-            return False
-
-    except subprocess.TimeoutExpired:
-        print(f"[错误] 转换超时")
-        return False
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        return result.returncode == 0 and output_path.exists()
     except Exception as e:
         print(f"[错误] MIDI 转换失败: {e}")
         return False
 
 
+# ═══════════════ 系统信息 ═══════════════
 @app.get("/")
 async def root():
-    return {
-        "message": "情感音乐生成系统 API",
-        "version": "1.0.0",
-        "endpoints": {
-            "/api/generate": "生成音乐",
-            "/api/download/{filename}": "下载 MIDI 文件",
-            "/api/audio/{filename}": "获取音频文件（WAV）",
-            "/api/emotions": "获取可用情感列表",
-            "/api/status": "检查系统状态"
-        }
-    }
+    return {"message": "情感音乐生成系统 API v2.0", "status": "running"}
 
 
 @app.get("/api/emotions")
 async def get_emotions():
-    """获取可用的情感列表"""
     return {
         "emotions": [
-            {"id": "Q1", "name": "开心", "english": "Happy", "description": "明快活泼的旋律"},
-            {"id": "Q2", "name": "紧张", "english": "Tense", "description": "激烈紧迫的节奏"},
-            {"id": "Q3", "name": "悲伤", "english": "Sad", "description": "忧郁深沉的曲调"},
-            {"id": "Q4", "name": "平静", "english": "Calm", "description": "舒缓安宁的氛围"},
+            {"id": k, "name": v["name"], "english": v["en"], "description": v["desc"]}
+            for k, v in EMOTION_MAP.items()
         ]
     }
 
 
 @app.get("/api/status")
 async def check_status():
-    """检查系统状态"""
-    emo_exists = EMO_DIR.exists()
-    soundfont_exists = SOUNDFONT_PATH.exists()
+    library_stats = {}
+    if MIDI_LIBRARY_DIR.exists():
+        for emo in ["Q1", "Q2", "Q3", "Q4"]:
+            library_stats[emo] = len(list(MIDI_LIBRARY_DIR.glob(f"*_{emo}_full.mid")))
 
-    demo_dir = GENERATION_DIR / "demo" / "demo"
-    demo_files_exist = demo_dir.exists() and any(demo_dir.glob("*.mid"))
-
-    # 检查 FluidSynth 是否可用
     fluidsynth_ok = False
     try:
         result = subprocess.run(["fluidsynth", "--version"], capture_output=True, timeout=5)
         fluidsynth_ok = result.returncode == 0
-    except:
+    except Exception:
         pass
 
+    gpu_info = "未检测到"
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c",
+             "import torch; print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else '无GPU')"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0:
+            gpu_info = result.stdout.strip()
+    except Exception:
+        pass
+
+    weights_status = {}
+    for key, path in DEFAULT_WEIGHTS.items():
+        weights_status[key] = (EMO_DIR / path).exists()
+
     return {
-        "status": "ok" if emo_exists and demo_files_exist else "error",
-        "emo_disentanger": emo_exists,
-        "demo_files": demo_files_exist,
-        "soundfont": soundfont_exists,
+        "status": "ok" if EMO_DIR.exists() else "error",
+        "emo_disentanger": EMO_DIR.exists(),
+        "midi_library": MIDI_LIBRARY_DIR.exists(),
+        "midi_library_stats": library_stats,
+        "demo_files": DEMO_DIR.exists() and any(DEMO_DIR.glob("*.mid")),
+        "soundfont": SOUNDFONT_PATH.exists(),
         "fluidsynth": fluidsynth_ok,
-        "generation_dir": str(GENERATION_DIR),
+        "gpu": gpu_info,
+        "weights": weights_status,
+        "configs": {k: (EMO_DIR / v).exists() for k, v in DEFAULT_CONFIGS.items()},
+        "active_tasks": len([t for t in active_tasks.values() if t.status == "running"]),
     }
 
 
-@app.post("/api/generate", response_model=GenerateResponse)
-async def generate_music(request: GenerateRequest):
-    """生成指定情感的音乐"""
-    emotion = request.emotion.upper()
+@app.get("/api/defaults")
+async def get_defaults():
+    """获取默认配置值"""
+    return {
+        "weights": DEFAULT_WEIGHTS,
+        "configs": DEFAULT_CONFIGS,
+        "generation": {
+            "temperature_gpt2": 1.2,
+            "temperature_performer": 1.1,
+            "top_p_gpt2": 0.97,
+            "top_p_performer": 0.99,
+            "max_bars": 128,
+            "tempo": 110,
+            "n_groups": 5,
+        },
+    }
 
-    if emotion not in EMOTION_MAP:
-        raise HTTPException(
-            status_code=400,
-            detail=f"无效的情感类型: {emotion}，可选: Q1, Q2, Q3, Q4"
-        )
 
-    emotion_info = EMOTION_MAP[emotion]
-    filename = DEMO_FILES.get(emotion, "")
+# ═══════════════ 推理 - Stage 1 Lead Sheet 生成 ═══════════════
+@app.post("/api/tasks/generate-leadsheet")
+async def start_generate_leadsheet(req: GenerateLeadSheetRequest):
+    task_id = str(uuid.uuid4())[:8]
 
-    # 查找 MIDI 文件
-    midi_path = find_midi_file(filename)
+    config_path = DEFAULT_CONFIGS.get(req.config, req.config)
+    weights = req.weights or DEFAULT_WEIGHTS["stage1"]
 
-    if not midi_path:
-        raise HTTPException(
-            status_code=503,
-            detail=f"MIDI 文件不存在: {filename}"
-        )
+    command = [
+        sys.executable,
+        "stage1_compose/inference.py",
+        "-c", config_path,
+        "-r", req.representation,
+        "-m", "lead_sheet",
+        "-i", weights,
+        "-o", req.output_dir,
+        "-n", str(req.n_groups),
+    ]
 
-    # 检查是否已有缓存的音频文件
-    wav_filename = filename.replace('.mid', '.wav')
-    wav_path = AUDIO_CACHE_DIR / wav_filename
+    task = TaskInfo(task_id, "generate_leadsheet", f"Stage1 Lead Sheet 生成 ({req.n_groups} 组)")
+    active_tasks[task_id] = task
 
-    # 如果没有缓存，则转换
-    if not wav_path.exists():
-        success = convert_midi_to_wav(midi_path, wav_path)
-        if not success:
-            # 转换失败，但仍返回成功（只是没有音频）
-            return GenerateResponse(
-                success=True,
-                emotion=emotion,
-                emotion_name=emotion_info["name"],
-                filename=filename,
-                audio_url="",
-                bars=15,
-                notes=495,
-                duration="0:33",
-                message=f"已加载 {emotion_info['name']} 音乐（音频转换失败，请下载 MIDI）"
-            )
-
-    return GenerateResponse(
-        success=True,
-        emotion=emotion,
-        emotion_name=emotion_info["name"],
-        filename=filename,
-        audio_url=f"/api/audio/{wav_filename}",
-        bars=15,
-        notes=495,
-        duration="0:33",
-        message=f"成功生成 {emotion_info['name']} 情感音乐"
+    thread = threading.Thread(
+        target=run_subprocess_task,
+        args=(task, command, str(EMO_DIR)),
+        daemon=True,
     )
+    thread.start()
+
+    return {"task_id": task_id, "message": "Lead Sheet 生成任务已启动"}
 
 
+# ═══════════════ 推理 - Stage 2 完整音乐生成 ═══════════════
+@app.post("/api/tasks/generate-music")
+async def start_generate_music(req: GenerateMusicRequest):
+    task_id = str(uuid.uuid4())[:8]
+
+    config_path = DEFAULT_CONFIGS.get(req.config, req.config)
+    if req.model_type == "gpt2":
+        weights = req.weights or DEFAULT_WEIGHTS["stage2_gpt2"]
+    else:
+        weights = req.weights or DEFAULT_WEIGHTS["stage2_performer"]
+
+    command = [
+        sys.executable,
+        "stage2_accompaniment/inference.py",
+        "-m", req.model_type,
+        "-c", config_path,
+        "-r", req.representation,
+        "-i", weights,
+        "-o", req.output_dir,
+    ]
+
+    task = TaskInfo(task_id, "generate_music", f"Stage2 完整音乐生成 ({req.model_type})")
+    active_tasks[task_id] = task
+
+    thread = threading.Thread(
+        target=run_subprocess_task,
+        args=(task, command, str(EMO_DIR)),
+        daemon=True,
+    )
+    thread.start()
+
+    return {"task_id": task_id, "message": "完整音乐生成任务已启动"}
+
+
+# ═══════════════ 训练 ═══════════════
+@app.post("/api/tasks/train")
+async def start_training(req: TrainRequest):
+    task_id = str(uuid.uuid4())[:8]
+
+    config_path = DEFAULT_CONFIGS.get(req.config, req.config)
+
+    if req.stage == "stage1":
+        command = [
+            sys.executable,
+            "stage1_compose/train.py",
+            "-c", config_path,
+            "-r", req.representation,
+        ]
+        desc = f"Stage1 训练 ({req.representation})"
+    else:
+        command = [
+            sys.executable,
+            "stage2_accompaniment/train.py",
+            "-m", req.model_type,
+            "-c", config_path,
+            "-r", req.representation,
+        ]
+        desc = f"Stage2 训练 ({req.model_type}, {req.representation})"
+
+    task = TaskInfo(task_id, "training", desc)
+    active_tasks[task_id] = task
+
+    thread = threading.Thread(
+        target=run_subprocess_task,
+        args=(task, command, str(EMO_DIR)),
+        daemon=True,
+    )
+    thread.start()
+
+    return {"task_id": task_id, "message": f"训练任务已启动: {desc}"}
+
+
+# ═══════════════ 任务管理 ═══════════════
+@app.get("/api/tasks")
+async def list_tasks():
+    return {"tasks": [t.to_dict() for t in active_tasks.values()]}
+
+
+@app.get("/api/tasks/{task_id}")
+async def get_task(task_id: str, offset: int = 0):
+    task = active_tasks.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    result = task.to_dict()
+    if offset > 0:
+        result["logs"] = task.logs[offset:]
+    result["log_offset"] = len(task.logs)
+    return result
+
+
+@app.post("/api/tasks/{task_id}/stop")
+async def stop_task(task_id: str):
+    task = active_tasks.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if task.process:
+        task.process.terminate()
+        task.status = "stopped"
+        task.logs.append("[系统] 任务已手动终止")
+        task.end_time = datetime.now().isoformat()
+        return {"message": "任务已终止"}
+    return {"message": "任务未在运行"}
+
+
+@app.delete("/api/tasks/{task_id}")
+async def delete_task(task_id: str):
+    task = active_tasks.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if task.status == "running":
+        raise HTTPException(status_code=400, detail="无法删除正在运行的任务")
+    del active_tasks[task_id]
+    return {"message": "任务已删除"}
+
+
+# ═══════════════ 文件浏览 ═══════════════
+@app.post("/api/files/browse")
+async def browse_files(req: BrowseRequest):
+    if req.directory:
+        dir_path = Path(req.directory)
+        if not dir_path.is_absolute():
+            dir_path = EMO_DIR / req.directory
+    else:
+        dir_path = MIDI_LIBRARY_DIR
+
+    if not dir_path.exists():
+        return {"files": [], "directory": str(dir_path), "error": "目录不存在"}
+
+    files = []
+    for f in sorted(dir_path.glob(req.pattern)):
+        if f.is_file():
+            files.append({
+                "filename": f.name,
+                "path": str(f),
+                "size": f.stat().st_size,
+                "modified": datetime.fromtimestamp(f.stat().st_mtime).isoformat(),
+            })
+
+    return {"files": files, "directory": str(dir_path), "count": len(files)}
+
+
+@app.post("/api/files/play")
+async def play_local_file(req: PlayFileRequest):
+    """播放本地文件（自动转换 MIDI 为 WAV）"""
+    file_path = Path(req.file_path)
+    if not file_path.is_absolute():
+        file_path = EMO_DIR / req.file_path
+
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail=f"文件不存在: {req.file_path}")
+
+    if file_path.suffix.lower() == ".wav":
+        wav_name = file_path.name
+        cache_path = AUDIO_CACHE_DIR / wav_name
+        if not cache_path.exists():
+            shutil.copy2(file_path, cache_path)
+        return {
+            "success": True,
+            "audio_url": f"/api/audio/{wav_name}",
+            "filename": file_path.name,
+            "file_path": str(file_path),
+        }
+
+    if file_path.suffix.lower() in (".mid", ".midi"):
+        wav_name = file_path.stem + ".wav"
+        wav_path = AUDIO_CACHE_DIR / wav_name
+        if not wav_path.exists():
+            success = convert_midi_to_wav(file_path, wav_path)
+            if not success:
+                raise HTTPException(status_code=500, detail="MIDI 转 WAV 失败，请检查 FluidSynth")
+        return {
+            "success": True,
+            "audio_url": f"/api/audio/{wav_name}",
+            "filename": file_path.name,
+            "file_path": str(file_path),
+        }
+
+    raise HTTPException(status_code=400, detail="不支持的文件格式，请使用 .mid 或 .wav")
+
+
+@app.get("/api/files/search")
+async def search_files(query: str = "", directory: str = ""):
+    search_dirs = []
+    if directory:
+        dir_path = Path(directory)
+        if not dir_path.is_absolute():
+            dir_path = EMO_DIR / directory
+        search_dirs.append(dir_path)
+    else:
+        search_dirs.extend([MIDI_LIBRARY_DIR, DEMO_DIR, GENERATION_DIR])
+
+    results = []
+    for d in search_dirs:
+        if not d.exists():
+            continue
+        for pattern in ["**/*.mid", "**/*.midi", "**/*.wav"]:
+            for f in d.glob(pattern):
+                if query and query.lower() not in f.name.lower():
+                    continue
+                results.append({
+                    "filename": f.name,
+                    "path": str(f),
+                    "size": f.stat().st_size,
+                    "type": f.suffix.lower(),
+                })
+
+    return {"files": results[:100], "count": len(results)}
+
+
+# ═══════════════ 文件下载/播放 ═══════════════
 @app.get("/api/download/{filename}")
 async def download_midi(filename: str):
-    """下载 MIDI 文件"""
-    midi_path = find_midi_file(filename)
-
-    if midi_path:
-        return FileResponse(
-            path=midi_path,
-            filename=filename,
-            media_type="audio/midi"
-        )
-
+    for d in [MIDI_LIBRARY_DIR, DEMO_DIR, GENERATION_DIR]:
+        path = d / filename
+        if path.exists():
+            return FileResponse(path=path, filename=filename, media_type="audio/midi")
     raise HTTPException(status_code=404, detail=f"文件不存在: {filename}")
 
 
 @app.get("/api/audio/{filename}")
 async def get_audio(filename: str):
-    """获取音频文件（WAV）"""
     wav_path = AUDIO_CACHE_DIR / filename
-
     if wav_path.exists():
-        return FileResponse(
-            path=wav_path,
-            filename=filename,
-            media_type="audio/wav"
-        )
-
-    raise HTTPException(status_code=404, detail=f"音频文件不存在: {filename}")
-
-
-@app.get("/api/files")
-async def list_files():
-    """列出所有可用的文件"""
-    files = []
-
-    # 扫描 demo 目录
-    demo_dir = GENERATION_DIR / "demo" / "demo"
-    if demo_dir.exists():
-        for f in demo_dir.glob("*.mid"):
-            files.append({
-                "filename": f.name,
-                "path": str(f.relative_to(BASE_DIR)),
-                "size": f.stat().st_size
-            })
-
-    # 扫描音频缓存
-    audio_files = []
-    for f in AUDIO_CACHE_DIR.glob("*.wav"):
-        audio_files.append({
-            "filename": f.name,
-            "size": f.stat().st_size
-        })
-
-    return {
-        "midi_files": files,
-        "audio_files": audio_files,
-        "midi_count": len(files),
-        "audio_count": len(audio_files)
-    }
+        return FileResponse(path=wav_path, filename=filename, media_type="audio/wav")
+    raise HTTPException(status_code=404, detail=f"音频不存在: {filename}")
 
 
 @app.delete("/api/cache")
 async def clear_cache():
-    """清除音频缓存"""
     count = 0
     for f in AUDIO_CACHE_DIR.glob("*.wav"):
         f.unlink()
