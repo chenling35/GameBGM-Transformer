@@ -370,25 +370,26 @@ def run_full_generation(task: TaskInfo, req: GenerateRequest):
         )
         task.process = process2
 
-        # 进度监控: 每 10 秒检查已生成的 *_full.mid 文件数
+        # 进度监控: 每 60 秒检查已生成的 *_full.mid 文件数
         stage2_done = threading.Event()
         stage2_start = time.time()
 
         def monitor_progress():
             last_count = 0
             while not stage2_done.is_set():
-                stage2_done.wait(10)
+                stage2_done.wait(60)
                 if stage2_done.is_set():
                     break
                 full_files = sorted(output_path.glob("*_full.mid"))
                 count = len(full_files)
-                elapsed = int(time.time() - stage2_start)
-                mins, secs = divmod(elapsed, 60)
                 if count != last_count:
                     for f in full_files[last_count:]:
-                        task.logs.append(f"[Stage2] 已生成: {f.name}")
+                        size_kb = f.stat().st_size / 1024
+                        task.logs.append(f"[Stage2] 新文件: {f.name} ({size_kb:.1f} KB)")
                     last_count = count
-                task.logs.append(f"[Stage2] 进度: {count}/{expected_files} | 已用时 {mins:02d}:{secs:02d}")
+                elapsed = int(time.time() - stage2_start)
+                mins, secs = divmod(elapsed, 60)
+                task.logs.append(f"[Stage2] 进度: {count}/{expected_files} 文件 | {mins}分{secs}秒")
 
         monitor_thread = threading.Thread(target=monitor_progress, daemon=True)
         monitor_thread.start()
