@@ -7,6 +7,7 @@ import sys
 import uuid
 import shutil
 import subprocess
+import time
 import threading
 from pathlib import Path
 from datetime import datetime
@@ -358,14 +359,48 @@ def run_full_generation(task: TaskInfo, req: GenerateRequest):
         task.logs.append(f"[Stage2] 命令: {' '.join(stage2_cmd)}")
         task.logs.append("")
 
+        # 计算预期文件数: 每个 lead sheet 生成 2 个 full 文件
+        expected_files = req.n_groups * 2
+        task.logs.append(f"[Stage2] 预计生成 {expected_files} 个文件，请耐心等待...")
+        task.logs.append("")
+
         process2 = subprocess.Popen(
             stage2_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, cwd=str(EMO_DIR), bufsize=1, encoding="utf-8", errors="replace",
         )
         task.process = process2
+
+        # 进度监控: 每 10 秒检查已生成的 *_full.mid 文件数
+        stage2_done = threading.Event()
+        stage2_start = time.time()
+
+        def monitor_progress():
+            last_count = 0
+            while not stage2_done.is_set():
+                stage2_done.wait(10)
+                if stage2_done.is_set():
+                    break
+                full_files = sorted(output_path.glob("*_full.mid"))
+                count = len(full_files)
+                elapsed = int(time.time() - stage2_start)
+                mins, secs = divmod(elapsed, 60)
+                if count != last_count:
+                    for f in full_files[last_count:]:
+                        task.logs.append(f"[Stage2] 已生成: {f.name}")
+                    last_count = count
+                task.logs.append(f"[Stage2] 进度: {count}/{expected_files} | 已用时 {mins:02d}:{secs:02d}")
+
+        monitor_thread = threading.Thread(target=monitor_progress, daemon=True)
+        monitor_thread.start()
+
         for line in iter(process2.stdout.readline, ""):
             task.logs.append(line.rstrip())
         process2.wait()
+        stage2_done.set()
+
+        elapsed_total = int(time.time() - stage2_start)
+        mins, secs = divmod(elapsed_total, 60)
+        task.logs.append(f"[Stage2] 完成，耗时 {mins:02d}:{secs:02d}")
 
         if process2.returncode != 0:
             task.status = "failed"

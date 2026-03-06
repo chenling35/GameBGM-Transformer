@@ -164,10 +164,15 @@ function InferenceTab() {
   const [audioUrl, setAudioUrl] = useState(null)
   const [currentFile, setCurrentFile] = useState(null)
   const [playLoading, setPlayLoading] = useState(false)
+  const [elapsed, setElapsed] = useState(0)
   const pollRef = useRef(null)
+  const timerRef = useRef(null)
   const audioRef = useRef(null)
 
-  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current) }, [])
+  useEffect(() => () => {
+    if (pollRef.current) clearInterval(pollRef.current)
+    if (timerRef.current) clearInterval(timerRef.current)
+  }, [])
 
   const selected = EMOTIONS.find(e => e.id === emotion)
 
@@ -202,7 +207,9 @@ function InferenceTab() {
   }
 
   const handleGenerate = async () => {
-    setLogs([]); setTaskStatus('running'); setResultFiles([])
+    setLogs([]); setTaskStatus('running'); setResultFiles([]); setElapsed(0)
+    if (timerRef.current) clearInterval(timerRef.current)
+    timerRef.current = setInterval(() => setElapsed(t => t + 1), 1000)
     try {
       const res = await fetch(`${API_BASE}/api/tasks/generate`, {
         method: 'POST',
@@ -229,6 +236,7 @@ function InferenceTab() {
           setTaskStatus(d.status)
           if (d.status !== 'running') {
             clearInterval(pollRef.current)
+            if (timerRef.current) clearInterval(timerRef.current)
             if (d.status === 'completed') fetchResults()
           }
         } catch (e) { console.error(e) }
@@ -304,6 +312,11 @@ function InferenceTab() {
             <button onClick={handleStop} className="stop-btn">终止任务</button>
           )}
           {taskStatus && <StatusBadge status={taskStatus} />}
+          {elapsed > 0 && (
+            <span className="text-sm text-gray-500 font-mono">
+              {String(Math.floor(elapsed / 60)).padStart(2, '0')}:{String(elapsed % 60).padStart(2, '0')}
+            </span>
+          )}
         </div>
 
         <LogOutput logs={logs} />
