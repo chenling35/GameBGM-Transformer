@@ -1,53 +1,87 @@
-# Python
+# ============================================
+# GameBGM-Transformer .gitignore
+# ============================================
+
+# ---------- Python ----------
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
 *.egg-info/
+*.egg
 .eggs/
 dist/
 build/
+*.whl
 
-# Virtual Environment
+# ---------- Virtual Environments ----------
 venv/
 env/
+.venv/
 .env
 
-# IDE
+# ---------- IDE ----------
 .idea/
 .vscode/
 *.swp
 *.swo
+*~
 
-# PyTorch models
+# ---------- OS ----------
+.DS_Store
+Thumbs.db
+Desktop.ini
+nul
+
+# ---------- PyTorch / ML Models ----------
 *.pt
 *.pth
 *.ckpt
+*.safetensors
 
-# Large folders - IGNORE ALL
+# ---------- Training Artifacts ----------
 checkpoints/
-data/
 logs/
 tensorboard/
+runs/
+wandb/
 
-# Frontend
+# ---------- Data (large, local only) ----------
+data/
+
+# ---------- EMO-Disentanger (external model, large) ----------
+EMO-Disentanger/
+
+# ---------- Frontend ----------
 frontend/node_modules/
 frontend/dist/
+frontend/dist-ssr/
 
-# Backend cache
+# ---------- Backend Runtime ----------
 backend/audio_cache/
 backend/__pycache__/
 
-# EMO-Disentanger
-EMO-Disentanger/
-
-# MIDI files
+# ---------- MIDI (generated artifacts) ----------
 *.mid
+*.midi
 
-# OS
-.DS_Store
-Thumbs.db
+# ---------- Audio (generated artifacts) ----------
+*.wav
+*.mp3
+*.flac
+*.ogg
 
-# Jupyter
+# ---------- Claude Code Temp Files ----------
+tmpclaude-*
+**/tmpclaude-*
+.claude/
+
+# ---------- Jupyter ----------
 .ipynb_checkpoints/
+
+# ---------- Misc ----------
+*.log
+*.tmp
+*.bak
+*.orig
