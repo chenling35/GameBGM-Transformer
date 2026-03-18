@@ -89,3 +89,41 @@ python stage2_accompaniment/inference.py -m gpt2 -c stage2_accompaniment/config/
 - Frontend: React 19 + Vite 7 + Tailwind CSS (单文件 App.jsx)
 - Model: PyTorch + Transformers (GPT-2)
 - Environment: Conda (GameBGM-Transformer), Python, Node.js
+
+## Data Pipeline (EMO-Disentanger)
+
+核心文件: `EMO-Disentanger/representations/midi2events_emopia.py` (787行)
+
+**处理流程**: MIDI → midi2corpus() → corpus2lead()/corpus2full() → events2words.py → data_splits.py
+
+**硬性要求**:
+- 仅接受钢琴 (`INSTR_NAME_MAP = {'piano': 0}`)
+- 需要 3 轨: melody (instruments[0]), texture (instruments[1]), bass (instruments[2])
+- 每 beat 需要 `root_quality_bass` 格式和弦标注 (从 midi_obj.markers 读取)
+- 需要调性标签 (从 adjust_keyname.json 加载)
+- 情感标签从文件名前缀提取 (Q1/Q2/Q3/Q4)
+- 4/4 拍号, 480 TPB
+- 使用 Functional Representation (相对音高 + 罗马数字和弦)，非标准 REMI
+
+**表示方式**: Functional Representation
+- 音高: 相对音阶度数 (scale degree)
+- 和弦: 罗马数字标记 (I, ii, V7 等)
+- 优势: 调性不变性，利于跨调学习
+
+## VGMusic 游戏数据集
+
+位置: `data/raw/vgmusic/vg_music_database/` (31,800 首游戏 MIDI)
+
+**与 EMO-Disentanger 的兼容性**: 极低
+- 平均 7.8 乐器轨 (需仅钢琴)
+- 0% 和弦标注 (需 100%)
+- 0% 情感标签
+- 74% 含鼓轨
+
+详见 `docs/FEASIBILITY_REPORT.md` 和 `docs/ALTERNATIVE_MODELS_REPORT.md`
+
+## Alternative Models (研究中)
+
+- **midi-emotion**: 连续 V/A 情感控制 + 多乐器 + Pianoroll — 最匹配论文主题
+- **MIDI-GPT**: 128 种 GM 乐器 + GPT-2 架构 — 数据准备最简单
+- **GETMusic**: 扩散模型 + 6种乐器 — 生成最快 (~6s/曲)

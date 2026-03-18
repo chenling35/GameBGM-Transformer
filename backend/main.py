@@ -187,6 +187,16 @@ class TrainRequest(BaseModel):
     config: str = "stage1_finetune"
 
 
+class GenerateV2Request(BaseModel):
+    """midi-emotion 生成请求（连续 V/A 情感条件）"""
+    valence: float = 0.5        # 效价 [-1, 1]
+    arousal: float = 0.5        # 唤醒度 [-1, 1]
+    instruments: list[str] = ["piano"]  # 乐器列表
+    n_samples: int = 1
+    output_dir: str = "generation/midi_emotion"
+    checkpoint: str = ""        # 留空 = 默认权重
+
+
 class PlayFileRequest(BaseModel):
     file_path: str
 
@@ -452,6 +462,45 @@ async def start_generate(req: GenerateRequest):
     thread.start()
 
     return {"task_id": task_id, "message": f"开始生成 {req.emotion} {emotion_name} 风格音乐"}
+
+
+# ═══════════════ midi-emotion 生成 (Mock) ═══════════════
+@app.post("/api/tasks/generate_v2")
+async def start_generate_v2(req: GenerateV2Request):
+    """
+    midi-emotion 连续 V/A 情感生成接口 (当前为 Mock)
+    TODO: 接入真实 src/midi_emotion/generate.py
+    """
+    task_id = str(uuid.uuid4())[:8]
+    desc = (
+        f"[midi-emotion] V={req.valence:+.2f} A={req.arousal:+.2f} "
+        f"乐器: {','.join(req.instruments)} × {req.n_samples}"
+    )
+    task = TaskInfo(task_id, "generate_v2", desc)
+    active_tasks[task_id] = task
+
+    def mock_run():
+        import time
+        task.logs.append("[系统] midi-emotion 生成任务已启动 (Mock 模式)")
+        task.logs.append(f"[参数] valence={req.valence:+.2f}  arousal={req.arousal:+.2f}")
+        task.logs.append(f"[参数] instruments={req.instruments}  n_samples={req.n_samples}")
+        task.logs.append(f"[参数] output_dir={req.output_dir}")
+        task.logs.append("")
+        task.logs.append("[Mock] 实际推理尚未实现，等待 src/midi_emotion/generate.py 完成")
+        task.logs.append("[Mock] 后续步骤:")
+        task.logs.append("  1. 克隆 https://github.com/serkansulun/midi-emotion")
+        task.logs.append("  2. 在 src/midi_emotion/generate.py 中实现 generate() 函数")
+        task.logs.append("  3. 将此 Mock 替换为真实子进程调用")
+        task.logs.append("")
+        time.sleep(2)
+        task.status = "completed"
+        task.logs.append("[系统] Mock 任务完成!")
+        task.end_time = datetime.now().isoformat()
+
+    thread = threading.Thread(target=mock_run, daemon=True)
+    thread.start()
+
+    return {"task_id": task_id, "message": desc}
 
 
 # ═══════════════ 训练 ═══════════════

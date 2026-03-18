@@ -147,8 +147,232 @@ function StatusBadge({ status }) {
   )
 }
 
-/* ═══════════════ 音乐生成 ═══════════════ */
-function InferenceTab() {
+/* ═══════════════ 模型切换器 ═══════════════ */
+const MODELS = [
+  {
+    id: 'emo-disentanger',
+    label: 'EMO-Disentanger',
+    desc: '离散 Q1-Q4 | 钢琴 | Two-stage Transformer',
+    color: '#f97316',
+    badge: '已可用',
+    badgeCls: 'bg-green-100 text-green-700',
+  },
+  {
+    id: 'midi-emotion',
+    label: 'midi-emotion',
+    desc: '连续 V/A | 多乐器 | Pianoroll Transformer',
+    color: '#6366f1',
+    badge: '开发中',
+    badgeCls: 'bg-yellow-100 text-yellow-700',
+  },
+]
+
+function ModelSwitcher({ value, onChange }) {
+  return (
+    <div className="mb-6">
+      <label className="field-label">选择生成模型</label>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-1">
+        {MODELS.map(m => (
+          <button
+            key={m.id}
+            onClick={() => onChange(m.id)}
+            className={`emotion-card text-left ${value === m.id ? 'emotion-card-active' : ''}`}
+            style={value === m.id ? { borderColor: m.color, boxShadow: `0 0 0 1px ${m.color}` } : {}}
+          >
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full" style={{ background: m.color }} />
+              <span className="font-semibold text-gray-800">{m.label}</span>
+              <span className={`ml-auto text-xs px-1.5 py-0.5 rounded-full ${m.badgeCls}`}>{m.badge}</span>
+            </div>
+            <div className="text-xs text-gray-400 mt-1">{m.desc}</div>
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/* ═══════════════ V/A 滑块 ═══════════════ */
+const INSTRUMENT_OPTIONS = [
+  { value: 'piano',   label: '钢琴 Piano' },
+  { value: 'guitar',  label: '吉他 Guitar' },
+  { value: 'bass',    label: '贝斯 Bass' },
+  { value: 'strings', label: '弦乐 Strings' },
+  { value: 'drums',   label: '鼓 Drums' },
+]
+
+function VASlider({ label, value, onChange, hint }) {
+  return (
+    <div>
+      <div className="flex justify-between items-center mb-1">
+        <label className="field-label mb-0">{label}</label>
+        <span className="text-sm font-mono text-gray-600">{value >= 0 ? '+' : ''}{Number(value).toFixed(2)}</span>
+      </div>
+      <input
+        type="range" min="-1" max="1" step="0.01"
+        value={value}
+        onChange={e => onChange(parseFloat(e.target.value))}
+        className="w-full accent-indigo-500"
+      />
+      <div className="flex justify-between text-xs text-gray-400 mt-0.5">
+        <span>{hint[0]}</span>
+        <span>0</span>
+        <span>{hint[1]}</span>
+      </div>
+    </div>
+  )
+}
+
+function InstrumentSelect({ value, onChange }) {
+  const toggle = (inst) => {
+    if (value.includes(inst)) {
+      if (value.length === 1) return  // 至少保留一个
+      onChange(value.filter(i => i !== inst))
+    } else {
+      onChange([...value, inst])
+    }
+  }
+  return (
+    <div>
+      <label className="field-label">乐器选择 (多选)</label>
+      <div className="flex flex-wrap gap-2 mt-1">
+        {INSTRUMENT_OPTIONS.map(opt => (
+          <button
+            key={opt.value}
+            onClick={() => toggle(opt.value)}
+            className={`px-3 py-1.5 rounded-full text-sm border transition-colors ${
+              value.includes(opt.value)
+                ? 'bg-indigo-600 text-white border-indigo-600'
+                : 'bg-white text-gray-600 border-gray-300 hover:border-indigo-400'
+            }`}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/* ═══════════════ midi-emotion 面板 ═══════════════ */
+function MidiEmotionPanel() {
+  const [valence, setValence] = useState(0.5)
+  const [arousal, setArousal] = useState(0.5)
+  const [instruments, setInstruments] = useState(['piano'])
+  const [nSamples, setNSamples] = useState('1')
+  const [taskId, setTaskId] = useState(null)
+  const [logs, setLogs] = useState([])
+  const [taskStatus, setTaskStatus] = useState(null)
+  const [elapsed, setElapsed] = useState(0)
+  const pollRef = useRef(null)
+  const timerRef = useRef(null)
+
+  useEffect(() => () => {
+    if (pollRef.current) clearInterval(pollRef.current)
+    if (timerRef.current) clearInterval(timerRef.current)
+  }, [])
+
+  // Russell 环形模型象限推断（仅显示用）
+  const inferQuadrant = () => {
+    if (valence >= 0 && arousal >= 0) return 'Q1 开心 (Happy)'
+    if (valence < 0 && arousal >= 0) return 'Q2 紧张 (Tense)'
+    if (valence < 0 && arousal < 0) return 'Q3 悲伤 (Sad)'
+    return 'Q4 平静 (Calm)'
+  }
+
+  const handleGenerate = async () => {
+    setLogs([]); setTaskStatus('running'); setElapsed(0)
+    if (timerRef.current) clearInterval(timerRef.current)
+    timerRef.current = setInterval(() => setElapsed(t => t + 1), 1000)
+    try {
+      const res = await fetch(`${API_BASE}/api/tasks/generate_v2`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          valence,
+          arousal,
+          instruments,
+          n_samples: parseInt(nSamples),
+          output_dir: 'generation/midi_emotion',
+        }),
+      })
+      const data = await res.json()
+      setTaskId(data.task_id)
+      setLogs([`[系统] 任务 ${data.task_id} 已启动`])
+
+      let offset = 0
+      pollRef.current = setInterval(async () => {
+        try {
+          const r = await fetch(`${API_BASE}/api/tasks/${data.task_id}?offset=${offset}`)
+          const d = await r.json()
+          if (d.logs?.length > 0) { setLogs(prev => [...prev, ...d.logs]); offset = d.log_offset }
+          setTaskStatus(d.status)
+          if (d.status !== 'running') {
+            clearInterval(pollRef.current)
+            if (timerRef.current) clearInterval(timerRef.current)
+          }
+        } catch (e) { console.error(e) }
+      }, 1000)
+    } catch (e) {
+      setLogs([`[错误] ${e.message}`])
+      setTaskStatus('failed')
+    }
+  }
+
+  return (
+    <div className="space-y-5">
+      <StepSection step="1" title="情感参数 (Russell 环形模型 — 连续值)">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <VASlider
+            label="效价 Valence"
+            value={valence}
+            onChange={setValence}
+            hint={['负效价 (悲伤/紧张)', '正效价 (开心/平静)']}
+          />
+          <VASlider
+            label="唤醒度 Arousal"
+            value={arousal}
+            onChange={setArousal}
+            hint={['低唤醒 (平静/悲伤)', '高唤醒 (开心/紧张)']}
+          />
+        </div>
+        <div className="mt-3 text-sm text-gray-500">
+          当前情感区域:&nbsp;
+          <span className="text-indigo-600 font-medium">{inferQuadrant()}</span>
+          <span className="ml-3 text-gray-400">V={valence >= 0 ? '+' : ''}{valence.toFixed(2)} &nbsp; A={arousal >= 0 ? '+' : ''}{arousal.toFixed(2)}</span>
+        </div>
+      </StepSection>
+
+      <StepSection step="2" title="生成参数">
+        <div className="space-y-4">
+          <InstrumentSelect value={instruments} onChange={setInstruments} />
+          <InputField label="生成数量" type="number" value={nSamples} onChange={setNSamples} min="1" max="10" />
+        </div>
+      </StepSection>
+
+      <StepSection step="3" title="开始生成">
+        <div className="flex items-center gap-3 mb-4">
+          <ActionButton onClick={handleGenerate} disabled={taskStatus === 'running'} primary>
+            生成音乐
+          </ActionButton>
+          {taskStatus && <StatusBadge status={taskStatus} />}
+          {elapsed > 0 && (
+            <span className="text-sm text-gray-500 font-mono">
+              {String(Math.floor(elapsed / 60)).padStart(2, '0')}:{String(elapsed % 60).padStart(2, '0')}
+            </span>
+          )}
+          <span className="ml-auto text-xs text-yellow-600 bg-yellow-50 border border-yellow-200 px-2 py-1 rounded">
+            Mock 模式 — 真实推理待实现
+          </span>
+        </div>
+        <LogOutput logs={logs} />
+      </StepSection>
+    </div>
+  )
+}
+
+/* ═══════════════ 音乐生成 (EMO-Disentanger) ═══════════════ */
+function EmoDisentangerPanel() {
   const [emotion, setEmotion] = useState('Q1')
   const [nGroups, setNGroups] = useState('1')
   const [outputDir, setOutputDir] = useState('generation/emopia_functional_two')
@@ -361,6 +585,22 @@ function InferenceTab() {
           </div>
         )}
       </StepSection>
+    </div>
+  )
+}
+
+/* ═══════════════ 音乐生成（顶层，含模型切换） ═══════════════ */
+function InferenceTab() {
+  const [activeModel, setActiveModel] = useState('emo-disentanger')
+  return (
+    <div>
+      <ModelSwitcher value={activeModel} onChange={setActiveModel} />
+      <div style={{ display: activeModel === 'emo-disentanger' ? 'block' : 'none' }}>
+        <EmoDisentangerPanel />
+      </div>
+      <div style={{ display: activeModel === 'midi-emotion' ? 'block' : 'none' }}>
+        <MidiEmotionPanel />
+      </div>
     </div>
   )
 }
@@ -617,8 +857,8 @@ function App() {
   return (
     <div className="app-container">
       <div className="app-header">
-        <h1 className="text-xl font-bold text-gray-800">EMO-Disentanger WebUI</h1>
-        <p className="text-sm text-gray-500 mt-1">基于 Transformer 的情感驱动钢琴音乐生成系统 (ISMIR 2024)</p>
+        <h1 className="text-xl font-bold text-gray-800">游戏情感音乐生成系统</h1>
+        <p className="text-sm text-gray-500 mt-1">EMO-Disentanger (离散 Q1-Q4) · midi-emotion (连续 V/A) · 毕业设计</p>
       </div>
 
       <div className="sys-bar">

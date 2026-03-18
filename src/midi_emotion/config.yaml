@@ -1,0 +1,41 @@
+# midi-emotion 模型配置
+# 论文: Sulun et al., "Symbolic Music Generation Conditioned on Continuous-Valued Emotions"
+# IEEE Access 2022 | https://github.com/serkansulun/midi-emotion
+
+model:
+  # Transformer 架构
+  d_model: 512
+  n_heads: 8
+  n_layers: 6
+  dropout: 0.1
+  max_seq_len: 1024
+
+emotion:
+  # 连续 V/A 条件注入
+  valence_range: [-1.0, 1.0]
+  arousal_range: [-1.0, 1.0]
+  conditioning: true  # false = 无标签预训练模式
+
+data:
+  # Pianoroll 表示: 时间×音高矩阵
+  fs: 24  # 每 beat 24 步
+  min_length: 96  # 最短 4 拍
+  instruments:
+    - piano
+    - guitar
+    - bass
+    - strings
+    - drums
+
+training:
+  batch_size: 4  # RTX 3060 6GB 适配
+  gradient_accumulation_steps: 4
+  learning_rate: 1.0e-4
+  epochs: 100
+  save_every: 10
+  checkpoint_dir: "src/midi_emotion/checkpoints"
+
+generation:
+  temperature: 0.9
+  top_p: 0.95
+  output_dir: "generation/midi_emotion"

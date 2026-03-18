@@ -240,8 +240,10 @@ scripts/
 
 ```
 docs/
-├── WORKLOG.md              # 开发日志
-└── PROJECT_STRUCTURE.md    # 本文件 - 目录结构说明
+├── WORKLOG.md                  # 开发日志
+├── PROJECT_STRUCTURE.md        # 本文件 - 目录结构说明
+├── FEASIBILITY_REPORT.md       # VGMusic 数据集与 EMO-Disentanger 兼容性分析
+└── ALTERNATIVE_MODELS_REPORT.md # 替代模型方案实施报告
 ```
 
 **设计原则**：
@@ -253,12 +255,13 @@ docs/
 
 ```
 docs/
-├── WORKLOG.md              # 开发日志
-├── PROJECT_STRUCTURE.md    # 目录结构说明
-├── API.md                  # API 接口文档
-├── DEPLOYMENT.md           # 部署指南
-├── ARCHITECTURE.md         # 系统架构设计
-└── images/                 # 文档配图
+├── WORKLOG.md                  # 开发日志
+├── PROJECT_STRUCTURE.md        # 目录结构说明
+├── FEASIBILITY_REPORT.md       # 数据可行性分析报告
+├── ALTERNATIVE_MODELS_REPORT.md # 替代模型实施报告
+├── API.md                      # API 接口文档
+├── DEPLOYMENT.md               # 部署指南
+└── images/                     # 文档配图
 ```
 
 ---

@@ -79,6 +79,50 @@
 
 ---
 
+## 2026-03-11 - 数据可行性分析 + 替代模型调研
+
+### 数据分析
+
+对 `data/raw/vgmusic/vg_music_database/` 中 31,800 个游戏 MIDI 文件进行了全面分析：
+
+| 维度 | VGMusic 数据集 | EMOPIA (EMO-Disentanger 训练数据) |
+|------|---------------|----------------------------------|
+| 规模 | 31,800 首 | 1,078 片段 |
+| 乐器 | 平均 7.8 轨，74% 含鼓 | 仅钢琴 (3轨: melody/texture/bass) |
+| 和弦标注 | 0% | 100% (每 beat 一个) |
+| 情感标签 | 0% | 100% (Q1-Q4) |
+| 拍号 | 88% 4/4 | 100% 4/4 |
+
+**结论：VGMusic 数据与 EMO-Disentanger 管线严重不兼容**（详见 `docs/FEASIBILITY_REPORT.md`）
+
+### EMO-Disentanger 数据管线深度分析
+
+核心文件 `representations/midi2events_emopia.py` (787行) 发现的关键限制：
+- `INSTR_NAME_MAP = {'piano': 0}` — 硬编码仅接受钢琴
+- `analyzer()` 中 `instruments[0/1/2]` — 硬编码三轨 melody/texture/bass
+- 和弦从 `midi_obj.markers` 读取 `root_quality_bass` 格式 — VGMusic 0% 有此标注
+- 情感从文件名前缀 `Q1/Q2/Q3/Q4` 提取 — VGMusic 无此命名
+- train.py 的 `-c` 参数有 `choices` 白名单 — 无法直接指定新配置文件
+
+### 替代模型调研
+
+评估了 5 个候选模型，推荐双线并行策略：
+
+| 模型 | 优势 | 数据准备难度 |
+|------|------|-------------|
+| **midi-emotion** (最推荐) | 连续 V/A 情感控制，多乐器，Pianoroll | 中 |
+| **MIDI-GPT** (最易上手) | 128种GM乐器，GPT-2架构，最简数据准备 | 低 |
+| GETMusic | 扩散模型，6秒/曲，6种乐器 | 中 |
+
+详细实施方案见 `docs/ALTERNATIVE_MODELS_REPORT.md`
+
+### 产出文件
+
+- `docs/FEASIBILITY_REPORT.md` — VGMusic 数据集与 EMO-Disentanger 兼容性分析报告
+- `docs/ALTERNATIVE_MODELS_REPORT.md` — 替代模型方案实施报告
+
+---
+
 ## 当前状态
 
 ### 已完成
