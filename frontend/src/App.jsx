@@ -1,4 +1,6 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useContext, createContext, useCallback } from 'react'
+
+const AudioContext = createContext(null)
 
 const API_BASE = ''
 
@@ -22,6 +24,12 @@ function getEmotionTag(filename) {
   }
   if (filename.includes('Positive')) return { id: '正效价', name: 'Positive', color: '#f97316' }
   if (filename.includes('Negative')) return { id: '负效价', name: 'Negative', color: '#6366f1' }
+  const va = filename.match(/_V(-?\d+)_A(-?\d+)/)
+  if (va) {
+    const fmt = n => (n >= 0 ? '+' : '') + n.toFixed(2)
+    const v = parseInt(va[1]) / 10, a = parseInt(va[2]) / 10
+    return { id: `[${fmt(v)},${fmt(a)}]`, name: '', color: '#6366f1' }
+  }
   return null
 }
 
@@ -36,10 +44,9 @@ function EmotionTag({ filename }) {
   const tag = getEmotionTag(filename)
   if (!tag) return null
   return (
-    <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-full"
+    <span className="inline-flex items-center text-xs px-1.5 py-0.5 rounded-full font-mono"
       style={{ background: tag.color + '18', color: tag.color }}>
-      <span className="w-1.5 h-1.5 rounded-full" style={{ background: tag.color }} />
-      {tag.id} {tag.name}
+      {tag.id}{tag.name ? ` ${tag.name}` : ''}
     </span>
   )
 }
@@ -192,63 +199,81 @@ function ModelSwitcher({ value, onChange }) {
   )
 }
 
-/* ═══════════════ V/A 滑块 ═══════════════ */
-const INSTRUMENT_OPTIONS = [
-  { value: 'piano',   label: '钢琴 Piano' },
-  { value: 'guitar',  label: '吉他 Guitar' },
-  { value: 'bass',    label: '贝斯 Bass' },
-  { value: 'strings', label: '弦乐 Strings' },
-  { value: 'drums',   label: '鼓 Drums' },
-]
+/* ═══════════════ 情感坐标平面 ═══════════════ */
+function EmotionPlane({ valence, arousal, onChange }) {
+  const svgRef = useRef(null)
+  const [dragging, setDragging] = useState(false)
+  const S = 260, P = 22, W = S - P * 2
 
-function VASlider({ label, value, onChange, hint }) {
-  return (
-    <div>
-      <div className="flex justify-between items-center mb-1">
-        <label className="field-label mb-0">{label}</label>
-        <span className="text-sm font-mono text-gray-600">{value >= 0 ? '+' : ''}{Number(value).toFixed(2)}</span>
-      </div>
-      <input
-        type="range" min="-1" max="1" step="0.01"
-        value={value}
-        onChange={e => onChange(parseFloat(e.target.value))}
-        className="w-full accent-indigo-500"
-      />
-      <div className="flex justify-between text-xs text-gray-400 mt-0.5">
-        <span>{hint[0]}</span>
-        <span>0</span>
-        <span>{hint[1]}</span>
-      </div>
-    </div>
-  )
-}
+  const vaToPx = (v, a) => [P + (v + 1) / 2 * W, P + (1 - (a + 1) / 2) * W]
+  const pxToVa = (x, y) => [
+    Math.max(-1, Math.min(1, ((x - P) / W) * 2 - 1)),
+    Math.max(-1, Math.min(1, (1 - (y - P) / W) * 2 - 1)),
+  ]
 
-function InstrumentSelect({ value, onChange }) {
-  const toggle = (inst) => {
-    if (value.includes(inst)) {
-      if (value.length === 1) return  // 至少保留一个
-      onChange(value.filter(i => i !== inst))
-    } else {
-      onChange([...value, inst])
-    }
+  const getVA = (e) => {
+    const svg = svgRef.current; if (!svg) return [0, 0]
+    const rect = svg.getBoundingClientRect()
+    const cx = e.touches ? e.touches[0].clientX : e.clientX
+    const cy = e.touches ? e.touches[0].clientY : e.clientY
+    return pxToVa(((cx - rect.left) / rect.width) * S, ((cy - rect.top) / rect.height) * S)
   }
+
+  const onDown = (e) => { e.preventDefault(); setDragging(true); const [v, a] = getVA(e); onChange(v, a) }
+  const onMove = (e) => { if (!dragging) return; e.preventDefault(); const [v, a] = getVA(e); onChange(v, a) }
+
+  const [dotX, dotY] = vaToPx(valence, arousal)
+  const fmt = n => (n >= 0 ? '+' : '') + n.toFixed(2)
+
   return (
-    <div>
-      <label className="field-label">乐器选择 (多选)</label>
-      <div className="flex flex-wrap gap-2 mt-1">
-        {INSTRUMENT_OPTIONS.map(opt => (
-          <button
-            key={opt.value}
-            onClick={() => toggle(opt.value)}
-            className={`px-3 py-1.5 rounded-full text-sm border transition-colors ${
-              value.includes(opt.value)
-                ? 'bg-indigo-600 text-white border-indigo-600'
-                : 'bg-white text-gray-600 border-gray-300 hover:border-indigo-400'
-            }`}
-          >
-            {opt.label}
-          </button>
-        ))}
+    <div className="flex flex-col items-center gap-3">
+      <svg ref={svgRef} viewBox={`0 0 ${S} ${S}`}
+        className="w-full max-w-xs cursor-crosshair select-none touch-none"
+        onMouseDown={onDown} onMouseMove={onMove}
+        onMouseUp={() => setDragging(false)} onMouseLeave={() => setDragging(false)}
+        onTouchStart={onDown} onTouchMove={onMove} onTouchEnd={() => setDragging(false)}
+      >
+        <defs>
+          {[['q1g','100%','0%','#f97316'],['q2g','0%','0%','#ef4444'],['q3g','0%','100%','#6366f1'],['q4g','100%','100%','#22c55e']].map(([id,cx,cy,c]) => (
+            <radialGradient key={id} id={id} cx={cx} cy={cy} r="141%" gradientUnits="objectBoundingBox">
+              <stop offset="0%" stopColor={c} stopOpacity="0.13"/>
+              <stop offset="100%" stopColor={c} stopOpacity="0"/>
+            </radialGradient>
+          ))}
+          <filter id="ds" x="-30%" y="-30%" width="160%" height="160%">
+            <feDropShadow dx="0" dy="1" stdDeviation="2" floodColor="#f97316" floodOpacity="0.35"/>
+          </filter>
+        </defs>
+        <rect x={P} y={P} width={W} height={W} rx="6" fill="#ffffff"/>
+        {['q1g','q2g','q3g','q4g'].map(id => <rect key={id} x={P} y={P} width={W} height={W} rx="6" fill={`url(#${id})`}/>)}
+        {[-0.5, 0.5].map(v => { const x = P + (v+1)/2*W; return <line key={v} x1={x} y1={P} x2={x} y2={P+W} stroke="#e5e7eb" strokeWidth="0.75" strokeDasharray="3,3"/> })}
+        {[-0.5, 0.5].map(a => { const y = P + (1-(a+1)/2)*W; return <line key={a} x1={P} y1={y} x2={P+W} y2={y} stroke="#e5e7eb" strokeWidth="0.75" strokeDasharray="3,3"/> })}
+        <line x1={S/2} y1={P} x2={S/2} y2={P+W} stroke="#c4c9d4" strokeWidth="1.2"/>
+        <line x1={P} y1={S/2} x2={P+W} y2={S/2} stroke="#c4c9d4" strokeWidth="1.2"/>
+        <rect x={P} y={P} width={W} height={W} rx="6" fill="none" stroke="#e5e7eb" strokeWidth="1"/>
+        <text x={S/2} y={P-6} textAnchor="middle" fontSize="9" fill="#c4c9d4">Arousal +</text>
+        <text x={S/2} y={P+W+13} textAnchor="middle" fontSize="9" fill="#c4c9d4">Arousal −</text>
+        <text x={P-4} y={S/2+3} textAnchor="end" fontSize="9" fill="#c4c9d4">V−</text>
+        <text x={P+W+4} y={S/2+3} textAnchor="start" fontSize="9" fill="#c4c9d4">V+</text>
+        <circle cx={dotX} cy={dotY} r="5" fill="#f97316" filter="url(#ds)"/>
+        <circle cx={dotX} cy={dotY} r="2.5" fill="white"/>
+      </svg>
+      <div className="text-xs font-mono text-gray-500">
+        Valence {fmt(valence)} &nbsp;|&nbsp; Arousal {fmt(arousal)}
+      </div>
+      <div className="flex items-center gap-4 text-sm font-mono">
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs text-gray-400">V</span>
+          <input type="number" min="-1" max="1" step="0.01" value={valence.toFixed(2)}
+            onChange={e => onChange(Math.max(-1, Math.min(1, parseFloat(e.target.value) || 0)), arousal)}
+            className="w-24 text-center border border-gray-200 rounded px-1.5 py-0.5 text-sm font-mono focus:outline-none focus:border-orange-400"/>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs text-gray-400">A</span>
+          <input type="number" min="-1" max="1" step="0.01" value={arousal.toFixed(2)}
+            onChange={e => onChange(valence, Math.max(-1, Math.min(1, parseFloat(e.target.value) || 0)))}
+            className="w-24 text-center border border-gray-200 rounded px-1.5 py-0.5 text-sm font-mono focus:outline-none focus:border-orange-400"/>
+        </div>
       </div>
     </div>
   )
@@ -258,8 +283,10 @@ function InstrumentSelect({ value, onChange }) {
 function MidiEmotionPanel() {
   const [valence, setValence] = useState(0.5)
   const [arousal, setArousal] = useState(0.5)
-  const [instruments, setInstruments] = useState(['piano'])
+  const [genLen, setGenLen] = useState(1024)
   const [nSamples, setNSamples] = useState('1')
+  const [outputDir, setOutputDir] = useState('midi-emotion/output/continuous_concat/generations/inference')
+  const [filePrefix, setFilePrefix] = useState('')
   const [taskId, setTaskId] = useState(null)
   const [logs, setLogs] = useState([])
   const [taskStatus, setTaskStatus] = useState(null)
@@ -272,14 +299,6 @@ function MidiEmotionPanel() {
     if (timerRef.current) clearInterval(timerRef.current)
   }, [])
 
-  // Russell 环形模型象限推断（仅显示用）
-  const inferQuadrant = () => {
-    if (valence >= 0 && arousal >= 0) return 'Q1 开心 (Happy)'
-    if (valence < 0 && arousal >= 0) return 'Q2 紧张 (Tense)'
-    if (valence < 0 && arousal < 0) return 'Q3 悲伤 (Sad)'
-    return 'Q4 平静 (Calm)'
-  }
-
   const handleGenerate = async () => {
     setLogs([]); setTaskStatus('running'); setElapsed(0)
     if (timerRef.current) clearInterval(timerRef.current)
@@ -289,17 +308,17 @@ function MidiEmotionPanel() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          valence,
-          arousal,
-          instruments,
+          valence: Math.round(valence * 100) / 100,
+          arousal: Math.round(arousal * 100) / 100,
+          gen_len: genLen,
           n_samples: parseInt(nSamples),
-          output_dir: 'generation/midi_emotion',
+          output_dir: outputDir,
+          file_prefix: filePrefix,
         }),
       })
       const data = await res.json()
       setTaskId(data.task_id)
       setLogs([`[系统] 任务 ${data.task_id} 已启动`])
-
       let offset = 0
       pollRef.current = setInterval(async () => {
         try {
@@ -321,40 +340,55 @@ function MidiEmotionPanel() {
 
   return (
     <div className="space-y-5">
-      <StepSection step="1" title="情感参数 (Russell 环形模型 — 连续值)">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <VASlider
-            label="效价 Valence"
-            value={valence}
-            onChange={setValence}
-            hint={['负效价 (悲伤/紧张)', '正效价 (开心/平静)']}
-          />
-          <VASlider
-            label="唤醒度 Arousal"
-            value={arousal}
-            onChange={setArousal}
-            hint={['低唤醒 (平静/悲伤)', '高唤醒 (开心/紧张)']}
-          />
-        </div>
-        <div className="mt-3 text-sm text-gray-500">
-          当前情感区域:&nbsp;
-          <span className="text-indigo-600 font-medium">{inferQuadrant()}</span>
-          <span className="ml-3 text-gray-400">V={valence >= 0 ? '+' : ''}{valence.toFixed(2)} &nbsp; A={arousal >= 0 ? '+' : ''}{arousal.toFixed(2)}</span>
+      <StepSection step="1" title="情感定位">
+        <div className="flex gap-8 items-start">
+          <EmotionPlane valence={valence} arousal={arousal} onChange={(v, a) => { setValence(v); setArousal(a) }} />
+          <div className="flex-1 space-y-3 text-sm text-gray-500 pt-2">
+            <p>在坐标平面上拖拽或直接输入数值来定位情感。</p>
+            <div className="space-y-1.5">
+              <div><span className="font-medium text-gray-700">Valence（效价）</span> — 情感的正负方向。正值偏愉悦，负值偏消极。</div>
+              <div><span className="font-medium text-gray-700">Arousal（唤醒度）</span> — 情感的激烈程度。正值高度激昂，负值平缓低沉。</div>
+            </div>
+            <p className="text-xs text-gray-400 pt-1">基于 Russell 情感环形模型，连续值范围 [−1, 1]。</p>
+          </div>
         </div>
       </StepSection>
 
       <StepSection step="2" title="生成参数">
-        <div className="space-y-4">
-          <InstrumentSelect value={instruments} onChange={setInstruments} />
-          <InputField label="生成数量" type="number" value={nSamples} onChange={setNSamples} min="1" max="10" />
+        <div className="space-y-1 mb-4">
+          <label className="field-label">生成时长</label>
+          <div className="grid grid-cols-4 gap-2">
+            {[
+              {label:'约 30 秒',sub:'片段 / 循环',val:512},
+              {label:'约 1 分钟',sub:'场景切换',val:1024},
+              {label:'约 2 分钟',sub:'完整段落',val:2048},
+              {label:'约 4 分钟',sub:'长篇背景',val:4096},
+            ].map(p => {
+              const active = genLen === p.val
+              return (
+                <button key={p.val} onClick={() => setGenLen(p.val)}
+                  className={`flex flex-col gap-1.5 py-3 px-3 rounded-lg border transition-all text-left ${
+                    active ? 'border-orange-400 bg-orange-50' : 'border-gray-200 hover:border-orange-300 hover:bg-gray-50'
+                  }`}>
+                  <span className={`text-sm font-semibold leading-none ${active ? 'text-orange-600' : 'text-gray-700'}`}>{p.label}</span>
+                  <span className="text-xs text-gray-400 leading-none">{p.sub}</span>
+                  <span className="text-xs text-gray-300 leading-none font-mono">{p.val} tokens</span>
+                </button>
+              )
+            })}
+          </div>
         </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <InputField label="生成数量" type="number" value={nSamples} onChange={setNSamples} min="1" max="10" />
+          <InputField label="文件前缀" value={filePrefix} onChange={setFilePrefix} placeholder="可选" />
+        </div>
+        <InputField label="输出目录" value={outputDir} onChange={setOutputDir} />
+        <p className="text-xs text-gray-400 mt-3">五轨同步生成 · 鼓 · 钢琴 · 吉他 · 贝斯 · 弦乐</p>
       </StepSection>
 
       <StepSection step="3" title="开始生成">
         <div className="flex items-center gap-3 mb-4">
-          <ActionButton onClick={handleGenerate} disabled={taskStatus === 'running'} primary>
-            生成音乐
-          </ActionButton>
+          <ActionButton onClick={handleGenerate} disabled={taskStatus === 'running'} primary>生成音乐</ActionButton>
           {taskStatus && <StatusBadge status={taskStatus} />}
           {elapsed > 0 && (
             <span className="text-sm text-gray-500 font-mono">
@@ -375,7 +409,8 @@ function MidiEmotionPanel() {
 function EmoDisentangerPanel() {
   const [emotion, setEmotion] = useState('Q1')
   const [nGroups, setNGroups] = useState('1')
-  const [outputDir, setOutputDir] = useState('generation/emopia_functional_two')
+  const [outputDir, setOutputDir] = useState('EMO-Disentanger/generation/demo/demo')
+  const [filePrefix, setFilePrefix] = useState('')
   const [modelType, setModelType] = useState('gpt2')
   const [stage1Weights, setStage1Weights] = useState('default')
   const [stage2Weights, setStage2Weights] = useState('default')
@@ -385,13 +420,11 @@ function EmoDisentangerPanel() {
   const [logs, setLogs] = useState([])
   const [taskStatus, setTaskStatus] = useState(null)
   const [resultFiles, setResultFiles] = useState([])
-  const [audioUrl, setAudioUrl] = useState(null)
-  const [currentFile, setCurrentFile] = useState(null)
   const [playLoading, setPlayLoading] = useState(false)
   const [elapsed, setElapsed] = useState(0)
   const pollRef = useRef(null)
   const timerRef = useRef(null)
-  const audioRef = useRef(null)
+  const { setAudio } = useContext(AudioContext)
 
   useEffect(() => () => {
     if (pollRef.current) clearInterval(pollRef.current)
@@ -410,9 +443,7 @@ function EmoDisentangerPanel() {
       })
       if (!res.ok) { const err = await res.json(); throw new Error(err.detail) }
       const data = await res.json()
-      setAudioUrl(data.audio_url)
-      setCurrentFile(data.filename)
-      setTimeout(() => { audioRef.current?.load(); audioRef.current?.play().catch(() => {}) }, 100)
+      setAudio(data.audio_url, data.filename)
     } catch (e) {
       setLogs(prev => [...prev, `[错误] 播放失败: ${e.message}`])
     } finally { setPlayLoading(false) }
@@ -488,6 +519,7 @@ function EmoDisentangerPanel() {
       <StepSection step="2" title="生成参数">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <InputField label="生成数量" type="number" value={nGroups} onChange={setNGroups} min="1" max="50" />
+          <InputField label="文件前缀" value={filePrefix} onChange={setFilePrefix} placeholder="可选" />
           <InputField label="输出目录" value={outputDir} onChange={setOutputDir} />
           <RadioGroup label="模型骨干" name="model_type_inf"
             options={[
@@ -497,6 +529,7 @@ function EmoDisentangerPanel() {
             value={modelType} onChange={setModelType}
           />
         </div>
+        <p className="text-xs text-gray-400 mt-3">仅生成钢琴单轨</p>
 
         <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
@@ -544,15 +577,6 @@ function EmoDisentangerPanel() {
         </div>
 
         <LogOutput logs={logs} />
-
-        {audioUrl && (
-          <div className="mt-3 p-3 bg-gray-50 rounded-md border border-gray-200">
-            <div className="text-sm text-gray-600 mb-2">
-              正在播放: <span className="text-gray-800 font-medium">{currentFile}</span>
-            </div>
-            <audio ref={audioRef} src={audioUrl} controls className="w-full" />
-          </div>
-        )}
 
         {resultFiles.length > 0 && (
           <div className="mt-4">
@@ -711,24 +735,28 @@ function TrainingTab() {
 }
 
 /* ═══════════════ 文件播放 ═══════════════ */
+const QUICK_DIRS = [
+  { label: 'EMO-Disentanger', path: 'EMO-Disentanger/generation/demo/demo' },
+  { label: 'midi-emotion', path: 'midi-emotion/output/continuous_concat/generations/inference' },
+]
+
 function PlayerTab() {
-  const [filePath, setFilePath] = useState('')
+  const [browsePath, setBrowsePath] = useState('EMO-Disentanger/generation/demo/demo')
   const [searchQuery, setSearchQuery] = useState('')
   const [files, setFiles] = useState([])
-  const [browsePath, setBrowsePath] = useState('generation/emopia_functional_two')
-  const [audioUrl, setAudioUrl] = useState(null)
-  const [currentFile, setCurrentFile] = useState(null)
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
-  const audioRef = useRef(null)
+  const { setAudio, audioUrl, currentFile, audioRef } = useContext(AudioContext)
+  const debounceRef = useRef(null)
 
-  const handleBrowse = async () => {
+  const doBrowse = async (path) => {
+    if (!path.trim()) return
     setError(null)
     try {
       const res = await fetch(`${API_BASE}/api/files/browse`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ directory: browsePath, pattern: '*.mid' }),
+        body: JSON.stringify({ directory: path.trim(), pattern: '*.mid' }),
       })
       const data = await res.json()
       setFiles(data.files || [])
@@ -736,13 +764,10 @@ function PlayerTab() {
     } catch (e) { setError(e.message) }
   }
 
-  const handleSearch = async () => {
-    setError(null)
-    try {
-      const res = await fetch(`${API_BASE}/api/files/search?query=${encodeURIComponent(searchQuery)}`)
-      const data = await res.json()
-      setFiles(data.files || [])
-    } catch (e) { setError(e.message) }
+  const handlePathChange = (path) => {
+    setBrowsePath(path)
+    clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => doBrowse(path), 500)
   }
 
   const handlePlay = async (path) => {
@@ -755,91 +780,88 @@ function PlayerTab() {
       })
       if (!res.ok) { const err = await res.json(); throw new Error(err.detail || '播放失败') }
       const data = await res.json()
-      setAudioUrl(data.audio_url)
-      setCurrentFile(data.filename)
-      setFilePath(path)
-      setTimeout(() => { audioRef.current?.load(); audioRef.current?.play().catch(() => {}) }, 100)
+      setAudio(data.audio_url, data.filename)
     } catch (e) { setError(e.message) }
     finally { setLoading(false) }
   }
 
-  useEffect(() => { handleBrowse() }, [])
+  useEffect(() => { doBrowse(browsePath) }, [])
+
+  const filteredFiles = searchQuery.trim()
+    ? files.filter(f => f.filename.toLowerCase().includes(searchQuery.toLowerCase()))
+    : files
 
   return (
-    <div className="space-y-5">
-      <StepSection step="1" title="输入文件路径播放">
-        <div className="flex gap-2">
-          <input type="text" value={filePath}
-            placeholder="输入 MIDI/WAV 文件路径"
-            onChange={e => setFilePath(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && filePath.trim() && handlePlay(filePath.trim())}
-            className="field-input flex-1" />
-          <ActionButton onClick={() => handlePlay(filePath.trim())} disabled={!filePath.trim() || loading}>
-            {loading ? '转换中...' : '播放'}
-          </ActionButton>
-        </div>
-        {audioUrl && (
-          <div className="mt-3 p-3 bg-gray-50 rounded-md border border-gray-200">
-            <div className="text-sm text-gray-600 mb-2">
-              正在播放: <span className="text-gray-800 font-medium">{currentFile}</span>
-              {currentFile && <span className="ml-2"><EmotionTag filename={currentFile} /></span>}
-            </div>
-            <audio ref={audioRef} src={audioUrl} controls className="w-full" />
+    <div className="space-y-4">
+      <div className="flex gap-2 items-center">
+        <input type="text" value={browsePath} onChange={e => handlePathChange(e.target.value)}
+          className="field-input flex-1" placeholder="目录路径" />
+        <ActionButton onClick={() => doBrowse(browsePath)}>刷新</ActionButton>
+      </div>
+
+      <div className="flex gap-2 flex-wrap">
+        {QUICK_DIRS.map(d => (
+          <button key={d.path} onClick={() => handlePathChange(d.path)}
+            className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
+              browsePath === d.path
+                ? 'bg-orange-500 text-white border-orange-500'
+                : 'text-gray-500 border-gray-300 hover:border-orange-400'
+            }`}>
+            {d.label}
+          </button>
+        ))}
+      </div>
+
+      <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+        placeholder="过滤文件名..." className="field-input w-full" />
+
+      {audioUrl && (
+        <div className="border border-gray-200 rounded-lg bg-white px-4 py-3">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-xs text-gray-400">正在播放</span>
+            <span className="text-sm font-medium text-gray-800 truncate">{currentFile}</span>
+            {currentFile && <EmotionTag filename={currentFile} />}
           </div>
-        )}
-        {error && (
-          <div className="mt-2 text-sm text-red-600 bg-red-50 p-2 rounded-md border border-red-200">{error}</div>
-        )}
-      </StepSection>
-
-      <StepSection step="2" title="浏览和搜索文件">
-        <div className="flex gap-2 mb-3">
-          <input type="text" value={browsePath}
-            onChange={e => setBrowsePath(e.target.value)} className="field-input flex-1" />
-          <ActionButton onClick={handleBrowse}>浏览</ActionButton>
+          <audio ref={audioRef} src={audioUrl} controls className="w-full h-8" />
         </div>
-        <div className="flex gap-2 mb-3">
-          <input type="text" value={searchQuery}
-            placeholder="搜索文件名 (如: Q1, Q2, samp_00...)"
-            onChange={e => setSearchQuery(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && handleSearch()}
-            className="field-input flex-1" />
-          <ActionButton onClick={handleSearch}>搜索</ActionButton>
-        </div>
+      )}
 
-        <div className="file-list">
-          {files.length === 0 ? (
-            <div className="text-gray-400 text-sm p-4 text-center">没有找到文件</div>
-          ) : (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-gray-500 border-b border-gray-200">
-                  <th className="py-2 px-3 font-medium">文件名</th>
-                  <th className="py-2 px-3 font-medium w-24">情感</th>
-                  <th className="py-2 px-3 font-medium w-20">大小</th>
-                  <th className="py-2 px-3 font-medium w-20">操作</th>
+      {error && <div className="text-sm text-red-600 bg-red-50 p-2 rounded-md border border-red-200">{error}</div>}
+
+      <div className="file-list">
+        {filteredFiles.length === 0 ? (
+          <div className="text-gray-400 text-sm p-4 text-center">没有找到文件</div>
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-gray-500 border-b border-gray-200">
+                <th className="py-2 px-3 font-medium">文件名</th>
+                <th className="py-2 px-3 font-medium w-28">情感</th>
+                <th className="py-2 px-3 font-medium w-20">大小</th>
+                <th className="py-2 px-3 font-medium w-20">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredFiles.map((f, i) => (
+                <tr key={i} className={`border-b border-gray-100 hover:bg-orange-50/50 ${currentFile === f.filename ? 'bg-orange-50' : ''}`}>
+                  <td className="py-2 px-3">
+                    <div className="font-medium text-gray-800">{f.filename}</div>
+                    <div className="text-xs text-gray-400 truncate max-w-md">{f.path}</div>
+                  </td>
+                  <td className="py-2 px-3"><EmotionTag filename={f.filename} /></td>
+                  <td className="py-2 px-3 text-gray-500">{formatSize(f.size)}</td>
+                  <td className="py-2 px-3">
+                    <button onClick={() => handlePlay(f.path)} disabled={loading}
+                      className="text-orange-600 hover:text-orange-700 font-medium disabled:opacity-40">
+                      {loading && currentFile === f.filename ? '转换中...' : '播放'}
+                    </button>
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {files.map((f, i) => (
-                  <tr key={i} className="border-b border-gray-100 hover:bg-orange-50/50">
-                    <td className="py-2 px-3">
-                      <div className="font-medium text-gray-800">{f.filename}</div>
-                      <div className="text-xs text-gray-400 truncate max-w-md">{f.path}</div>
-                    </td>
-                    <td className="py-2 px-3"><EmotionTag filename={f.filename} /></td>
-                    <td className="py-2 px-3 text-gray-500">{formatSize(f.size)}</td>
-                    <td className="py-2 px-3">
-                      <button onClick={() => handlePlay(f.path)}
-                        className="text-orange-600 hover:text-orange-700 font-medium">播放</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      </StepSection>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
     </div>
   )
 }
@@ -848,6 +870,15 @@ function PlayerTab() {
 function App() {
   const [activeTab, setActiveTab] = useState('inference')
   const [sysStatus, setSysStatus] = useState(null)
+  const [audioUrl, setAudioUrl] = useState(null)
+  const [currentFile, setCurrentFile] = useState(null)
+  const audioRef = useRef(null)
+
+  const setAudio = useCallback((url, filename) => {
+    setAudioUrl(url)
+    setCurrentFile(filename)
+    setTimeout(() => { audioRef.current?.load(); audioRef.current?.play().catch(() => {}) }, 100)
+  }, [])
 
   useEffect(() => {
     fetch(`${API_BASE}/api/status`).then(r => r.json()).then(setSysStatus)
@@ -855,6 +886,7 @@ function App() {
   }, [])
 
   return (
+    <AudioContext.Provider value={{ setAudio, audioUrl, currentFile, audioRef }}>
     <div className="app-container">
       <div className="app-header">
         <h1 className="text-xl font-bold text-gray-800">游戏情感音乐生成系统</h1>
@@ -893,6 +925,7 @@ function App() {
         <span>Powered by EMO-Disentanger | Built with FastAPI + React</span>
       </div>
     </div>
+    </AudioContext.Provider>
   )
 }
 

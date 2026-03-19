@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import time
 import threading
+import random
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
@@ -191,8 +192,8 @@ class GenerateV2Request(BaseModel):
     """midi-emotion 生成请求（连续 V/A 情感条件）"""
     valence: float = 0.5        # 效价 [-1, 1]
     arousal: float = 0.5        # 唤醒度 [-1, 1]
-    instruments: list[str] = ["piano"]  # 乐器列表
-    n_samples: int = 1
+    gen_len: int = 2048         # 生成 token 数（越大越长越慢）
+    n_samples: int = 1          # 生成数量
     output_dir: str = "generation/midi_emotion"
     checkpoint: str = ""        # 留空 = 默认权重
 
@@ -296,8 +297,13 @@ def run_full_generation(task: TaskInfo, req: GenerateRequest):
         valence = EMOTION_TO_VALENCE.get(emotion, "Positive")
         emotion_name = EMOTION_MAP.get(emotion, {}).get("name", emotion)
 
+        # 生成随机种子用于日志追踪（EMO-Disentanger 脚本本身不接受 --seed 参数，
+        # 每次生成天然随机，此种子仅作记录用途）
+        run_seed = random.randint(100000, 999999)
+
         task.logs.append(f"[系统] 目标情感: {emotion} {emotion_name}")
         task.logs.append(f"[系统] 效价: {valence} | 模型: {req.model_type}")
+        task.logs.append(f"[系统] 本次随机种子（记录用）: {run_seed}")
         task.logs.append("")
         task.logs.append("=" * 50)
         task.logs.append("  Stage 1: 生成 Lead Sheet (主旋律 + 和弦)")
@@ -418,6 +424,15 @@ def run_full_generation(task: TaskInfo, req: GenerateRequest):
             task.logs.append(f"[Stage2] 失败，返回码: {process2.returncode}")
             return
 
+        # 清理 Stage 1 中间文件（lead sheet，Stage 2 已用完）
+        removed_stage1 = 0
+        for f in output_path.glob("samp_*_Positive.mid"):
+            f.unlink(); removed_stage1 += 1
+        for f in output_path.glob("samp_*_Negative.mid"):
+            f.unlink(); removed_stage1 += 1
+        if removed_stage1 > 0:
+            task.logs.append(f"[清理] 移除 {removed_stage1} 个 Stage 1 中间文件")
+
         # 列出生成的目标情感文件
         output_path = EMO_DIR / req.output_dir
         result_files = sorted(output_path.glob(f"*_{emotion}_full.mid"))
@@ -474,24 +489,41 @@ async def start_generate_v2(req: GenerateV2Request):
     task_id = str(uuid.uuid4())[:8]
     desc = (
         f"[midi-emotion] V={req.valence:+.2f} A={req.arousal:+.2f} "
-        f"乐器: {','.join(req.instruments)} × {req.n_samples}"
+        f"× {req.n_samples} samples"
     )
     task = TaskInfo(task_id, "generate_v2", desc)
     active_tasks[task_id] = task
 
     def mock_run():
-        import time
+        # 为每个 sample 分配独立随机种子，保证风格多样性
+        seeds = [random.randint(1, 999999) for _ in range(req.n_samples)]
+
         task.logs.append("[系统] midi-emotion 生成任务已启动 (Mock 模式)")
         task.logs.append(f"[参数] valence={req.valence:+.2f}  arousal={req.arousal:+.2f}")
-        task.logs.append(f"[参数] instruments={req.instruments}  n_samples={req.n_samples}")
+        task.logs.append(f"[参数] gen_len={req.gen_len}  n_samples={req.n_samples}")
         task.logs.append(f"[参数] output_dir={req.output_dir}")
         task.logs.append("")
-        task.logs.append("[Mock] 实际推理尚未实现，等待 src/midi_emotion/generate.py 完成")
-        task.logs.append("[Mock] 后续步骤:")
-        task.logs.append("  1. 克隆 https://github.com/serkansulun/midi-emotion")
-        task.logs.append("  2. 在 src/midi_emotion/generate.py 中实现 generate() 函数")
-        task.logs.append("  3. 将此 Mock 替换为真实子进程调用")
+        task.logs.append(f"[种子] 为 {req.n_samples} 个 sample 分配独立随机种子，保证风格差异:")
+        for i, seed in enumerate(seeds):
+            task.logs.append(f"  sample {i+1}: seed={seed}")
         task.logs.append("")
+
+        # 真实接入时将执行以下命令（每个 sample 独立子进程 + 独立种子）：
+        midi_emotion_dir = str(BASE_DIR / "midi-emotion")
+        model_dir = req.checkpoint if req.checkpoint else "continuous_concat"
+        for i, seed in enumerate(seeds):
+            cmd_preview = (
+                f"python src/generate.py "
+                f"--model_dir {model_dir} "
+                f"--conditioning continuous_concat "
+                f"--valence {req.valence:.4f} --arousal {req.arousal:.4f} "
+                f"--gen_len {req.gen_len} --batch_size 1 "
+                f"--seed {seed}"
+            )
+            task.logs.append(f"[待执行] sample {i+1}: {cmd_preview}")
+
+        task.logs.append("")
+        task.logs.append("[Mock] 真实推理尚未接入，等待模型权重就绪后替换此 Mock")
         time.sleep(2)
         task.status = "completed"
         task.logs.append("[系统] Mock 任务完成!")
@@ -590,7 +622,7 @@ async def browse_files(req: BrowseRequest):
     if req.directory:
         dir_path = Path(req.directory)
         if not dir_path.is_absolute():
-            dir_path = EMO_DIR / req.directory
+            dir_path = BASE_DIR / req.directory
     else:
         dir_path = MIDI_LIBRARY_DIR
 

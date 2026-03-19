@@ -53,6 +53,9 @@ data/
 # ---------- EMO-Disentanger (external model, large) ----------
 EMO-Disentanger/
 
+# ---------- midi-emotion (external model, large) ----------
+midi-emotion/
+
 # ---------- Frontend ----------
 frontend/node_modules/
 frontend/dist/
