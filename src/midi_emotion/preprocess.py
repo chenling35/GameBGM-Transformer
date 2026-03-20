@@ -1,5 +1,5 @@
 """
-EMOPIA / VGMIDI → midi-emotion 训练格式预处理
+EMOPIA / VGMIDI / VGMusic → midi-emotion 训练格式预处理
 
 用法示例:
   # EMOPIA
@@ -9,18 +9,25 @@ EMOPIA / VGMIDI → midi-emotion 训练格式预处理
     --label_csv data/raw/emopia/EMOPIA_1.0/label.csv \
     --output_dir data/processed/emopia
 
-  # VGMIDI
+  # VGMIDI（200首人工标注游戏音乐）
   python src/midi_emotion/preprocess.py \
     --dataset vgmidi \
     --midi_dir data/raw/vgmidi/clean/labelled \
     --label_csv data/raw/vgmidi/vgmidi_labelled.csv \
     --output_dir data/processed/vgmidi
 
+  # VGMusic（31800首自动标注游戏音乐，需先运行 label_vgmusic.py）
+  python src/midi_emotion/preprocess.py \
+    --dataset vgmusic \
+    --label_csv data/processed/vgmusic_labels.csv \
+    --output_dir data/processed/vgmusic \
+    --max_files 1000
+
 输出结构:
   data/processed/emopia/
-    ├── Q1_xxx.pt, Q2_xxx.pt, ...   (每首曲子的 bars)
-    ├── maps.pt                      (token 映射，供 Loader 使用)
-    └── features.csv                 (file, valence, arousal, split)
+    ├── xxx.pt          (每首曲子的 bars)
+    ├── maps.pt         (token 映射，供 Loader 使用)
+    └── features.csv    (file, valence, arousal, split)
 """
 
 import sys
@@ -187,10 +194,53 @@ def preprocess_vgmidi(midi_dir: Path, label_csv: Path, output_dir: Path,
     return records
 
 
+def preprocess_vgmusic(label_csv: Path, output_dir: Path,
+                       maps: dict, test_ratio: float = 0.1,
+                       max_files: int = None):
+    """处理 VGMusic 数据集（label_vgmusic.py 自动标注的连续 V/A）"""
+    df = pd.read_csv(label_csv)
+    # vgmusic_labels.csv 格式: midi_path, valence, arousal, quadrant
+    if max_files:
+        df = df.head(max_files)
+
+    records = []
+    skipped = 0
+
+    for _, row in tqdm(df.iterrows(), total=len(df), desc="VGMusic 预处理"):
+        midi_path = Path(str(row["midi"]))
+        if not midi_path.exists():
+            skipped += 1
+            continue
+
+        valence = float(row["valence"])
+        arousal = float(row["arousal"])
+
+        bars = process_file(midi_path, maps["event2idx"])
+        if bars is None:
+            skipped += 1
+            continue
+
+        # 用文件内容 hash 避免重名（不同游戏可能有同名文件）
+        stem = midi_path.stem + f"_vg{abs(hash(str(midi_path))) % 100000:05d}"
+        bars_tensors = [torch.from_numpy(bar) for bar in bars]
+        torch.save({"file": stem + ".pt", "bars": bars_tensors}, output_dir / f"{stem}.pt")
+
+        records.append({"file": stem, "valence": valence, "arousal": arousal,
+                        "quadrant": str(row.get("quadrant", ""))})
+
+    random.shuffle(records)
+    n_test = max(1, round(len(records) * test_ratio))
+    for i, r in enumerate(records):
+        r["split"] = "test" if i < n_test else "train"
+
+    print(f"VGMusic: 处理 {len(records)} 首，跳过 {skipped} 首")
+    return records
+
+
 def main():
-    parser = argparse.ArgumentParser(description="预处理 EMOPIA/VGMIDI 为 midi-emotion 格式")
-    parser.add_argument("--dataset", choices=["emopia", "vgmidi"], required=True)
-    parser.add_argument("--midi_dir", type=str, required=True, help="MIDI 文件目录")
+    parser = argparse.ArgumentParser(description="预处理 EMOPIA/VGMIDI/VGMusic 为 midi-emotion 格式")
+    parser.add_argument("--dataset", choices=["emopia", "vgmidi", "vgmusic"], required=True)
+    parser.add_argument("--midi_dir", type=str, default=None, help="MIDI 文件目录（vgmusic 不需要）")
     parser.add_argument("--label_csv", type=str, required=True, help="情感标签 CSV")
     parser.add_argument("--output_dir", type=str, required=True, help="输出目录")
     parser.add_argument("--test_ratio", type=float, default=0.1, help="测试集比例")
@@ -216,12 +266,17 @@ def main():
     midi_dir = Path(args.midi_dir)
     label_csv = Path(args.label_csv)
 
+    midi_dir = Path(args.midi_dir) if args.midi_dir else None
+
     if args.dataset == "emopia":
         records = preprocess_emopia(midi_dir, label_csv, output_dir, maps,
                                     test_ratio=args.test_ratio, max_files=args.max_files)
-    else:
+    elif args.dataset == "vgmidi":
         records = preprocess_vgmidi(midi_dir, label_csv, output_dir, maps,
                                     test_ratio=args.test_ratio, max_files=args.max_files)
+    else:  # vgmusic
+        records = preprocess_vgmusic(label_csv, output_dir, maps,
+                                     test_ratio=args.test_ratio, max_files=args.max_files)
 
     # 保存 features CSV
     feat_df = pd.DataFrame(records)
