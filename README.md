@@ -86,9 +86,9 @@
 
 ## 快速上手（3 步跑起来）
 
-> 前提：已完成安装步骤（含 Conda 环境、FluidSynth、模型权重）
+> 前提：已完成安装步骤（FluidSynth、模型权重），并在 Python 环境中安装好 `requirements.txt`
 
-**步骤 1 — 激活 Conda 环境**
+**步骤 1 — 激活 Python 环境**（以 Conda 为例，其他虚拟环境同理）
 ```bash
 conda activate GameBGM-Transformer
 ```
@@ -143,9 +143,12 @@ cd GameBGM-Transformer
 ### 2. Python 环境
 
 ```bash
+# 推荐：Conda 管理环境（方便控制 PyTorch/CUDA 版本）
 conda create -n GameBGM-Transformer python=3.10
 conda activate GameBGM-Transformer
 pip install -r requirements.txt
+
+# 也可以使用其他虚拟环境（venv / poetry 等），只需确保 requirements.txt 安装完整
 ```
 
 ### 3. 前端依赖

@@ -149,7 +149,7 @@ export default function MidiEmotionPanel() {
           <InputField label="文件前缀" value={filePrefix} onChange={setFilePrefix} placeholder="可选" />
           <InputField label="输出目录" value={outputDir} onChange={setOutputDir} />
         </div>
-        <p className="text-xs text-gray-400 mt-3">五轨同步生成 · 鼓 · 钢琴 · 吉他 · 贝斯 · 弦乐</p>
+        <p className="text-xs text-gray-400 mt-3">最多5轨（鼓·钢琴·吉他·贝斯·弦乐），实际轨数由模型决定</p>
       </StepSection>
 
       <StepSection step="3" title="开始生成">
