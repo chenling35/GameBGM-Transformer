@@ -64,10 +64,14 @@ midi-emotion/data_files/
 frontend/node_modules/
 frontend/dist/
 frontend/dist-ssr/
+# Vite 环境变量文件（本地配置不入库）
+frontend/.env.local
+frontend/.env.*.local
 
 # ---------- Backend Runtime ----------
 backend/audio_cache/
-backend/__pycache__/
+# backend/__pycache__/ 已被顶层 __pycache__/ 规则覆盖，保留注释供参考
+# backend/__pycache__/
 
 # ---------- MIDI (generated artifacts) ----------
 *.mid
@@ -87,8 +91,16 @@ tmpclaude-*
 # ---------- Jupyter ----------
 .ipynb_checkpoints/
 
+# ---------- 测试 & 覆盖率 ----------
+.coverage
+htmlcov/
+.pytest_cache/
+
 # ---------- Misc ----------
 *.log
 *.tmp
 *.bak
 *.orig
+# SQLite / 本地数据库（如有）
+*.db
+*.sqlite3

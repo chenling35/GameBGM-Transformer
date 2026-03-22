@@ -9,7 +9,6 @@ export default function EmoDisentangerPanel() {
   const [emotion, setEmotion] = useState('Q1')
   const [nGroups, setNGroups] = useState('1')
   const [outputDir, setOutputDir] = useState('EMO-Disentanger/generation/emopia_functional_two')
-  const [filePrefix, setFilePrefix] = useState('')
   const [taskId, setTaskId] = useState(null)
   const [logs, setLogs] = useState([])
   const [taskStatus, setTaskStatus] = useState(null)
@@ -113,7 +112,6 @@ export default function EmoDisentangerPanel() {
       <StepSection step="2" title="生成参数">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <InputField label="生成数量" type="number" value={nGroups} onChange={setNGroups} min="1" max="5" />
-          <InputField label="文件前缀" value={filePrefix} onChange={setFilePrefix} placeholder="可选" />
           <InputField label="输出目录" value={outputDir} onChange={setOutputDir} />
         </div>
         <div className="mt-3 text-xs text-gray-400">

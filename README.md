@@ -18,6 +18,97 @@
 
 系统支持推理生成、模型训练、文件浏览播放三大功能，并提供 FluidSynth 实时 MIDI 转音频试听。
 
+## 系统架构
+
+### 整体数据流
+
+```
+用户选择情感 (Q1-Q4 / V·A 连续值)
+        │
+        ▼
+┌─────────────────────────────────────────────────────┐
+│                    Web 前端 (React 19)               │
+│   情感选择器  │  参数面板  │  实时日志  │  音频播放   │
+└─────────────────────────┬───────────────────────────┘
+                          │ HTTP / REST
+                          ▼
+┌─────────────────────────────────────────────────────┐
+│               FastAPI 后端 (:8000)                   │
+│  任务调度  │  子进程管理  │  FluidSynth 转换          │
+└──────┬───────────────────────────────┬──────────────┘
+       │                               │
+       ▼                               ▼
+┌──────────────────┐         ┌─────────────────────┐
+│  EMO-Disentanger │         │    midi-emotion       │
+│  (ISMIR 2024)    │         │  (IEEE Access 2022)   │
+│                  │         │                       │
+│ Stage 1          │         │ Transformer +         │
+│  Transformer-XL  │         │ Continuous V/A        │
+│  → Lead Sheet    │         │ Conditioning          │
+│  (效价建模)      │         │  → Pianoroll MIDI     │
+│       │          │         │                       │
+│ Stage 2          │         └─────────────────────┘
+│  GPT-2/Performer │
+│  → Full Score    │
+│  (唤醒度建模)    │
+└──────────────────┘
+       │
+       ▼
+  .mid 文件 → FluidSynth → .wav → 浏览器播放
+```
+
+### EMO-Disentanger 两阶段生成细节
+
+```
+情感 Q1/Q4 → Positive 效价 ─┐
+情感 Q2/Q3 → Negative 效价 ─┤
+                             │
+                             ▼
+                    ┌─────────────┐
+                    │   Stage 1   │  Transformer-XL
+                    │  Lead Sheet │  emopia_finetune.yaml
+                    │   生成      │  ep016_loss0.685
+                    └──────┬──────┘
+                           │ samp_XX_Positive.mid
+                           │ samp_XX_Negative.mid
+                           ▼
+                    ┌─────────────┐
+                    │   Stage 2   │  GPT-2 / Performer
+                    │  Full Score │  emopia_finetune_gpt2.yaml
+                    │   生成      │  ep300_loss0.120
+                    └──────┬──────┘
+                           │
+                   ┌───────┴───────┐
+                   ▼               ▼
+          samp_XX_Q1_full.mid   samp_XX_Q3_full.mid
+          samp_XX_Q4_full.mid   samp_XX_Q2_full.mid
+```
+
+## 快速上手（3 步跑起来）
+
+> 前提：已完成安装步骤（含 Conda 环境、FluidSynth、模型权重）
+
+**步骤 1 — 激活 Conda 环境**
+```bash
+conda activate GameBGM-Transformer
+```
+
+**步骤 2 — 启动后端**（新开终端，保持运行）
+```bash
+cd backend
+python main.py
+# 看到 "Uvicorn running on http://0.0.0.0:8000" 即成功
+```
+
+**步骤 3 — 启动前端**（再开一个终端）
+```bash
+cd frontend
+npm run dev
+# 看到 "Local: http://localhost:5173" 后，打开浏览器访问该地址
+```
+
+Windows 用户也可以直接双击 `scripts\start.bat` 一键启动两个服务。
+
 ## 功能截图
 
 <!-- 可替换为实际截图 -->
@@ -145,27 +236,51 @@ GameBGM-Transformer/
 └── requirements.txt
 ```
 
-## 情感模型
+## 情感系统
 
-基于 Russell 环形情感模型，将情感映射到效价 (Valence) × 唤醒度 (Arousal) 二维空间：
+### Russell 环形情感模型 (Circumplex Model of Affect)
+
+本系统基于 Russell (1980) 提出的二维情感空间，将情感映射到 **效价 (Valence) × 唤醒度 (Arousal)** 坐标系：
 
 ```
-        高唤醒 (High Arousal)
-             │
-   Q2 紧张   │   Q1 开心
-   Tense     │   Happy
-             │
-─────────────┼─────────────
-  负效价      │      正效价
-             │
-   Q3 悲伤   │   Q4 平静
-   Sad       │   Calm
-             │
-        低唤醒 (Low Arousal)
+              高唤醒 (High Arousal)  +1.0
+                        │
+          Q2 紧张        │        Q1 开心
+          Tense         │        Happy
+          (负效价,高唤醒) │       (正效价,高唤醒)
+                        │
+─────────────────────────┼───────────────────────── Valence
+ -1.0  负效价            │          正效价  +1.0
+                        │
+          Q3 悲伤        │        Q4 平静
+          Sad           │        Calm
+          (负效价,低唤醒) │       (正效价,低唤醒)
+                        │
+              低唤醒 (Low Arousal)  -1.0
 ```
 
-- **EMO-Disentanger**：离散四象限 (Q1/Q2/Q3/Q4)
-- **midi-emotion**：连续数值 (Valence: -1~1, Arousal: -1~1)
+### 两种情感控制模式对比
+
+| 维度 | EMO-Disentanger | midi-emotion |
+|------|----------------|--------------|
+| 控制粒度 | 离散四象限 Q1/Q2/Q3/Q4 | 连续浮点数 V∈[-1,1], A∈[-1,1] |
+| 乐器 | 钢琴（单乐器）| 多乐器（Pianoroll，最少1轨）|
+| 情感精度 | 粗粒度，4个状态 | 细粒度，理论上无限状态 |
+| 效价建模 | Stage 1（Transformer-XL）| Continuous Conditioning |
+| 唤醒度建模 | Stage 2（GPT-2/Performer）| 同一模型统一建模 |
+| 适用场景 | 钢琴独奏 BGM | 多乐器游戏 BGM |
+
+### 情感 → 生成参数映射（EMO-Disentanger）
+
+| 情感 ID | 中文名 | 英文名 | 效价 | 唤醒度 |
+|---------|--------|--------|------|--------|
+| Q1 | 开心 | Happy | Positive (+) | High (+) |
+| Q2 | 紧张 | Tense | Negative (−) | High (+) |
+| Q3 | 悲伤 | Sad | Negative (−) | Low (−) |
+| Q4 | 平静 | Calm | Positive (+) | Low (−) |
+
+> Stage 1 只接受 Positive/Negative 效价标签（不区分Q1/Q4、Q2/Q3），
+> Stage 2 在伴奏生成阶段再利用完整的Q1-Q4标签完成唤醒度区分。
 
 ## 技术栈
 
