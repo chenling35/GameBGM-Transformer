@@ -448,6 +448,9 @@ def run_full_generation(task: TaskInfo, req: GenerateRequest):
         task.logs.append("")
 
         # Stage 1: Lead Sheet
+        # req.output_dir 是相对于项目根的路径（如 EMO-Disentanger/generation/emopia_functional_two）
+        # cwd 是 EMO_DIR（EMO-Disentanger/），所以 -o 需要去掉前缀
+        rel_output = req.output_dir.replace("EMO-Disentanger/", "", 1) if req.output_dir.startswith("EMO-Disentanger/") else req.output_dir
         s1_weights = req.stage1_weights if req.stage1_weights else DEFAULT_WEIGHTS["stage1"]
         stage1_cmd = [
             sys.executable,
@@ -456,7 +459,7 @@ def run_full_generation(task: TaskInfo, req: GenerateRequest):
             "-r", "functional",
             "-m", "lead_sheet",
             "-i", s1_weights,
-            "-o", req.output_dir,
+            "-o", rel_output,
             "-n", str(req.n_groups),
         ]
         task.logs.append(f"[Stage1] 命令: {' '.join(stage1_cmd)}")
@@ -481,7 +484,7 @@ def run_full_generation(task: TaskInfo, req: GenerateRequest):
 
         # 优化: 移除不需要的效价文件（.mid + _roman.txt），减少 Stage2 处理量
         opposite_valence = "Negative" if valence == "Positive" else "Positive"
-        output_path = EMO_DIR / req.output_dir
+        output_path = BASE_DIR / req.output_dir
         removed_count = 0
         for f in output_path.glob(f"samp_*_{opposite_valence}*"):
             f.unlink()
@@ -507,7 +510,7 @@ def run_full_generation(task: TaskInfo, req: GenerateRequest):
             "-c", DEFAULT_CONFIGS[stage2_config],
             "-r", "functional",
             "-i", s2_weights,
-            "-o", req.output_dir,
+            "-o", rel_output,
         ]
         task.logs.append(f"[Stage2] 命令: {' '.join(stage2_cmd)}")
         task.logs.append("")
@@ -527,7 +530,7 @@ def run_full_generation(task: TaskInfo, req: GenerateRequest):
         stage2_done = threading.Event()
         stage2_start = time.time()
         # 记录 Stage2 开始前已存在的文件，避免把遗留文件当新文件
-        existing_files = set(f.name for f in output_path.glob("*_full.mid"))
+        existing_files = set(f.name for f in list(output_path.glob("*.mid")) + list(output_path.glob("*.midi")))
 
         def monitor_progress():
             known_new = set()  # 本次已报告过的新文件
@@ -535,7 +538,7 @@ def run_full_generation(task: TaskInfo, req: GenerateRequest):
                 stage2_done.wait(60)
                 if stage2_done.is_set():
                     break
-                current_files = {f.name: f for f in output_path.glob("*_full.mid")}
+                current_files = {f.name: f for f in list(output_path.glob("*.mid")) + list(output_path.glob("*.midi"))}
                 # 只看本次新生成的（不在启动前就存在的）
                 new_files = {n: f for n, f in current_files.items() if n not in existing_files}
                 # 报告还没报告过的
@@ -569,6 +572,7 @@ def run_full_generation(task: TaskInfo, req: GenerateRequest):
         # 清理 Stage 1 中间文件（.mid lead sheet + _roman.txt，Stage 2 已用完）
         removed_stage1 = 0
         for pattern in ["samp_*_Positive.mid", "samp_*_Negative.mid",
+                         "samp_*_Positive.txt", "samp_*_Negative.txt",
                          "samp_*_Positive_roman.txt", "samp_*_Negative_roman.txt"]:
             for f in output_path.glob(pattern):
                 f.unlink(); removed_stage1 += 1
@@ -576,8 +580,8 @@ def run_full_generation(task: TaskInfo, req: GenerateRequest):
             task.logs.append(f"[清理] 移除 {removed_stage1} 个 Stage 1 中间文件")
 
         # 列出生成的目标情感文件
-        output_path = EMO_DIR / req.output_dir
-        result_files = sorted(output_path.glob(f"*_{emotion}_full.mid"))
+        output_path = BASE_DIR / req.output_dir
+        result_files = sorted(list(output_path.glob("*.mid")) + list(output_path.glob("*.midi")))
 
         task.logs.append("")
         task.logs.append("=" * 50)
