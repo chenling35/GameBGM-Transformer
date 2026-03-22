@@ -1,0 +1,6 @@
+[submodule "EMO-Disentanger"]
+	path = EMO-Disentanger
+	url = https://github.com/Yuer867/EMO-Disentanger.git
+[submodule "midi-emotion"]
+	path = midi-emotion
+	url = https://github.com/serkansulun/midi-emotion.git

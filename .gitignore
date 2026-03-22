@@ -50,11 +50,15 @@ wandb/
 # ---------- Data (large, local only) ----------
 data/
 
-# ---------- EMO-Disentanger (external model, large) ----------
-EMO-Disentanger/
+# ---------- Assets (large, download separately) ----------
+assets/soundfont.sf2
 
-# ---------- midi-emotion (external model, large) ----------
-midi-emotion/
+# ---------- 外部模型的大文件 (submodule 只追踪代码，大文件需手动下载) ----------
+EMO-Disentanger/best_weight/
+EMO-Disentanger/events/
+EMO-Disentanger/generation/
+midi-emotion/output/
+midi-emotion/data_files/
 
 # ---------- Frontend ----------
 frontend/node_modules/

@@ -41,8 +41,8 @@ function App() {
       </div>
 
       <div className="app-footer">
-        <span>毕业设计 - 基于 Transformer 的游戏情感音乐生成系统</span>
-        <span>Powered by EMO-Disentanger | Built with FastAPI + React</span>
+        <span>基于 Transformer 的游戏情感音乐生成系统</span>
+        <span>EMO-Disentanger + midi-emotion · FastAPI + React</span>
       </div>
     </div>
     </AudioContext.Provider>
